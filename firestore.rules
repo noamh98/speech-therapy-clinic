@@ -1,0 +1,87 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuth() && request.auth.token.email == 'noamh98@gmail.com';
+    }
+
+    function isOwner(therapistEmail) {
+      return isAuth() && request.auth.token.email == therapistEmail;
+    }
+
+    // Users collection – each user can read/write their own profile
+    match /users/{userId} {
+      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAuth() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // Therapist data – each document has therapist_email field
+    // Only the therapist or admin can access
+    function canAccessRecord() {
+      return isAuth() && (
+        isAdmin() ||
+        resource.data.therapist_email == request.auth.token.email
+      );
+    }
+
+    function canCreateRecord() {
+      return isAuth() && (
+        isAdmin() ||
+        request.resource.data.therapist_email == request.auth.token.email
+      );
+    }
+
+    match /patients/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update, delete: if canAccessRecord();
+    }
+
+    match /appointments/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update, delete: if canAccessRecord();
+    }
+
+    match /treatments/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update, delete: if canAccessRecord();
+    }
+
+    match /progress/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update, delete: if canAccessRecord();
+    }
+
+    match /intakeForms/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update, delete: if canAccessRecord();
+    }
+
+    match /templates/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update, delete: if canAccessRecord();
+    }
+
+    match /notifications/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update, delete: if canAccessRecord();
+    }
+
+    // Patient portal access – patients can read their own data
+    // (implement with a separate auth mechanism if needed)
+    // For now, portal access is handled client-side by checking portal_access_enabled
+  }
+}
