@@ -2,10 +2,20 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getPatients, createPatient, updatePatient, deletePatient, validateIsraeliId } from '../services/patients';
+import { 
+  getPatients, 
+  createPatient, 
+  updatePatient, 
+  deletePatient, 
+  validateIsraeliId,
+  restorePatient // וודא שהוספת את זה גם ב-Service
+} from '../services/patients';
 import { getPatientTreatmentCount } from '../services/treatments';
 import { PageHeader, EmptyState, Modal, ConfirmDialog, Spinner, Badge } from '../components/ui';
-import { Users, Plus, Search, Pencil, Trash2, ChevronLeft, Phone, Mail } from 'lucide-react';
+import { 
+  Users, Plus, Search, Pencil, Trash2, ChevronLeft, 
+  Phone, Mail, Archive, UserCheck 
+} from 'lucide-react';
 import { motion } from 'framer-motion';
 import { PATIENT_STATUSES } from '../utils/formatters';
 
@@ -24,6 +34,7 @@ export default function Patients() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [showArchived, setShowArchived] = useState(false); // מצב תצוגת ארכיון
   const [formOpen, setFormOpen] = useState(false);
   const [editPatient, setEditPatient] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -31,14 +42,15 @@ export default function Patients() {
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { load(); }, [user]);
+  useEffect(() => { load(); }, [user, showArchived]);
 
   async function load() {
     if (!user?.email) return;
     setLoading(true);
     try {
-      const p = await getPatients(user.email);
-      // Fetch treatment count for each patient
+      // שליפת מטופלים (כולל/לא כולל ארכיון לפי המצב)
+      const p = await getPatients(user.email, showArchived);
+      
       const withCounts = await Promise.all(p.map(async pt => ({
         ...pt,
         treatment_count: await getPatientTreatmentCount(pt.id),
@@ -86,6 +98,16 @@ export default function Patients() {
   const handleDelete = async () => {
     try {
       await deletePatient(deleteTarget.id);
+      setDeleteTarget(null);
+      load();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleRestore = async (id) => {
+    try {
+      await restorePatient(id);
       load();
     } catch (err) {
       alert(err.message);
@@ -97,13 +119,24 @@ export default function Patients() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="מטופלים"
-        subtitle={`${patients.length} מטופלים סה"כ`}
+        title={showArchived ? "ארכיון מטופלים" : "מטופלים"}
+        subtitle={showArchived ? "מטופלים שהועברו לארכיון" : `${patients.length} מטופלים פעילים`}
         actions={
-          <button onClick={openAdd} className="btn-primary flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            מטופל חדש
-          </button>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setShowArchived(!showArchived)} 
+              className={`btn-secondary flex items-center gap-2 ${showArchived ? 'bg-teal-50 border-teal-200 text-teal-700' : ''}`}
+            >
+              {showArchived ? <Users className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+              {showArchived ? 'חזרה למטופלים' : 'צפה בארכיון'}
+            </button>
+            {!showArchived && (
+              <button onClick={openAdd} className="btn-primary flex items-center gap-2">
+                <Plus className="w-4 h-4" />
+                מטופל חדש
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -118,19 +151,26 @@ export default function Patients() {
             onChange={e => setSearch(e.target.value)}
           />
         </div>
-        <select className="input w-auto" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-          <option value="all">הכל</option>
-          <option value="active">פעיל</option>
-          <option value="inactive">לא פעיל</option>
-        </select>
+        {!showArchived && (
+          <select className="input w-auto" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+            <option value="all">הכל</option>
+            <option value="active">פעיל</option>
+            <option value="inactive">לא פעיל</option>
+          </select>
+        )}
       </div>
 
       {loading ? (
         <div className="flex justify-center py-12"><Spinner size="lg" /></div>
       ) : filtered.length === 0 ? (
-        <EmptyState icon={Users} title="אין מטופלים" description="הוסף מטופל חדש כדי להתחיל" action={
-          <button onClick={openAdd} className="btn-primary">הוסף מטופל</button>
-        } />
+        <EmptyState 
+          icon={showArchived ? Archive : Users} 
+          title={showArchived ? "הארכיון ריק" : "אין מטופלים"} 
+          description={showArchived ? "" : "הוסף מטופל חדש כדי להתחיל"} 
+          action={!showArchived && (
+            <button onClick={openAdd} className="btn-primary">הוסף מטופל</button>
+          )} 
+        />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map(pt => (
@@ -139,13 +179,15 @@ export default function Patients() {
               patient={pt}
               onEdit={() => openEdit(pt)}
               onDelete={() => setDeleteTarget(pt)}
+              onRestore={() => handleRestore(pt.id)}
               onNavigate={() => navigate(`/patients/${pt.id}`)}
+              isArchivedView={showArchived}
             />
           ))}
         </div>
       )}
 
-      {/* Patient Form Modal */}
+      {/* Form Modal (נשאר ללא שינוי מהקוד המקורי שלך) */}
       <Modal
         open={formOpen}
         onClose={() => setFormOpen(false)}
@@ -189,7 +231,6 @@ export default function Patients() {
             <input className="input" value={form.address} onChange={set('address')} />
           </div>
 
-          {/* Parents */}
           <div className="border-t border-gray-100 pt-4">
             <p className="text-sm font-semibold text-gray-700 mb-3">פרטי הורים</p>
             <div className="grid grid-cols-2 gap-4">
@@ -237,33 +278,33 @@ export default function Patients() {
         open={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
-        title="מחיקת מטופל"
-        message={`האם למחוק את ${deleteTarget?.full_name}? לא ניתן לבטל פעולה זו.`}
-        confirmLabel="מחק"
+        title="העברה לארכיון"
+        message={`האם להעביר את ${deleteTarget?.full_name} לארכיון? כל התורים העתידיים שלו יימחקו, אך התיעודים יישמרו.`}
+        confirmLabel="העבר לארכיון"
         danger
       />
     </div>
   );
 }
 
-function PatientCard({ patient, onEdit, onDelete, onNavigate }) {
+function PatientCard({ patient, onEdit, onDelete, onRestore, onNavigate, isArchivedView }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="card hover:shadow-md transition-all group cursor-pointer"
+      className={`card hover:shadow-md transition-all group cursor-pointer ${isArchivedView ? 'opacity-75 bg-gray-50 border-dashed' : ''}`}
       onClick={onNavigate}
     >
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-400 to-blue-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0 ${isArchivedView ? 'bg-gray-400' : 'bg-gradient-to-br from-teal-400 to-blue-500'}`}>
             {patient.full_name?.[0] || '?'}
           </div>
           <div>
             <p className="font-semibold text-gray-900">{patient.full_name}</p>
             <div className="flex items-center gap-2 mt-0.5">
-              <Badge color={patient.status === 'active' ? 'green' : 'gray'}>
-                {patient.status === 'active' ? 'פעיל' : 'לא פעיל'}
+              <Badge color={isArchivedView ? 'gray' : (patient.status === 'active' ? 'green' : 'gray')}>
+                {isArchivedView ? 'בארכיון' : (patient.status === 'active' ? 'פעיל' : 'לא פעיל')}
               </Badge>
               <span className="text-xs text-gray-400">{patient.treatment_count || 0} טיפולים</span>
             </div>
@@ -273,9 +314,16 @@ function PatientCard({ patient, onEdit, onDelete, onNavigate }) {
           <button onClick={onEdit} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-700">
             <Pencil className="w-3.5 h-3.5" />
           </button>
-          <button onClick={onDelete} className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+          
+          {isArchivedView ? (
+            <button onClick={onRestore} className="p-1.5 hover:bg-green-50 rounded-lg text-gray-400 hover:text-green-600" title="שחזר">
+              <UserCheck className="w-3.5 h-3.5" />
+            </button>
+          ) : (
+            <button onClick={onDelete} className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500" title="ארכיון">
+              <Archive className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -284,12 +332,6 @@ function PatientCard({ patient, onEdit, onDelete, onNavigate }) {
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <Phone className="w-3.5 h-3.5" />
             <span dir="ltr">{patient.phone}</span>
-          </div>
-        )}
-        {patient.email && (
-          <div className="flex items-center gap-2 text-xs text-gray-500">
-            <Mail className="w-3.5 h-3.5" />
-            <span dir="ltr">{patient.email}</span>
           </div>
         )}
       </div>

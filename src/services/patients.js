@@ -1,7 +1,7 @@
 // src/services/patients.js
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  getDocs, getDoc, query, where, serverTimestamp, orderBy
+  getDocs, getDoc, query, where, serverTimestamp, orderBy, writeBatch
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { auth } from './firebase';
@@ -17,14 +17,22 @@ function systemFields(extra = {}) {
   };
 }
 
-export async function getPatients(therapistEmail) {
-  const q = query(
+// עדכון: מושך רק מטופלים שלא בארכיון כברירת מחדל
+export async function getPatients(therapistEmail, includeArchived = false) {
+  let q = query(
     collection(db, COLLECTION),
     where('therapist_email', '==', therapistEmail),
     orderBy('full_name', 'asc')
   );
+
   const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const results = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  // סינון מקומי כדי לא לסבך את ה-Index של פיירבייס בשלב זה
+  if (!includeArchived) {
+    return results.filter(p => !p.is_archived);
+  }
+  return results;
 }
 
 export async function getPatient(id) {
@@ -41,6 +49,7 @@ export async function createPatient(data) {
     created_date: now,
     updated_date: now,
     status: data.status || 'active',
+    is_archived: false, // שדה חדש
     portal_access_enabled: data.portal_access_enabled || false,
   });
   return ref.id;
@@ -53,17 +62,44 @@ export async function updatePatient(id, data) {
   });
 }
 
-export async function deletePatient(id) {
-  // Business rule: check if treatments exist before deleting
-  const treatmentsQ = query(
-    collection(db, 'treatments'),
-    where('patient_id', '==', id)
-  );
-  const treatmentsSnap = await getDocs(treatmentsQ);
-  if (!treatmentsSnap.empty) {
-    throw new Error('לא ניתן למחוק מטופל עם טיפולים קיימים. מחק קודם את כל הטיפולים.');
+/**
+ * מחיקת מטופל (העברה לארכיון) וניקוי תורים עתידיים
+ */
+export async function deletePatient(patientId) {
+  const user = auth.currentUser;
+  if (!user) throw new Error("User not authenticated");
+
+  try {
+    const batch = writeBatch(db);
+
+    // 1. העברה לארכיון (Soft Delete)
+    const patientRef = doc(db, COLLECTION, patientId);
+    batch.update(patientRef, { 
+      is_archived: true,
+      archived_date: serverTimestamp(),
+      updated_date: serverTimestamp()
+    });
+
+    // 2. מציאת כל התורים העתידיים של המטופל למחיקה
+    const today = new Date().toISOString().slice(0, 10);
+    const apptsRef = collection(db, 'appointments');
+    const q = query(
+      apptsRef, 
+      where('patient_id', '==', patientId),
+      where('date', '>=', today)
+    );
+    
+    const apptsSnap = await getDocs(q);
+    apptsSnap.forEach((d) => {
+      batch.delete(doc(db, 'appointments', d.id));
+    });
+
+    // 3. ביצוע הפעולה (העברה לארכיון + מחיקת תורים)
+    await batch.commit();
+  } catch (error) {
+    console.error("Error in deletePatient process:", error);
+    throw error;
   }
-  await deleteDoc(doc(db, COLLECTION, id));
 }
 
 /** Validate Israeli ID (Luhn-like algorithm) */
@@ -76,4 +112,19 @@ export function validateIsraeliId(id) {
     sum += digit;
   }
   return sum % 10 === 0;
+}
+/**
+ * שחזור מטופל מהארכיון
+ */
+export async function restorePatient(patientId) {
+  try {
+    await updateDoc(doc(db, COLLECTION, patientId), {
+      is_archived: false,
+      updated_date: serverTimestamp()
+    });
+    return true;
+  } catch (error) {
+    console.error("Error restoring patient:", error);
+    throw error;
+  }
 }

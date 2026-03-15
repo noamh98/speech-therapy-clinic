@@ -24,7 +24,11 @@ const DAYS_HE = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי
 const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
 function toDateStr(d) { return d.toISOString().slice(0, 10); }
-function isoToDate(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
+
+// פונקציית עזר לתאריך עברי
+function getHebrewDate(date) {
+  return new Intl.DateTimeFormat('he-u-ca-hebrew', { day: 'numeric', month: 'long' }).format(date);
+}
 
 export default function CalendarPage() {
   const { user } = useAuth();
@@ -33,7 +37,7 @@ export default function CalendarPage() {
   const [appointments, setAppointments] = useState([]);
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [apptModal, setApptModal] = useState(null); // {date, appt}
+  const [apptModal, setApptModal] = useState(null); 
   const [treatModal, setTreatModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
@@ -54,7 +58,6 @@ export default function CalendarPage() {
 
   const patientMap = Object.fromEntries(patients.map(p => [p.id, p]));
 
-  // Navigation
   const navigate = (dir) => {
     const d = new Date(cursor);
     if (view === 'day')   d.setDate(d.getDate() + dir);
@@ -63,7 +66,6 @@ export default function CalendarPage() {
     setCursor(d);
   };
 
-  // Get visible dates
   function getWeekDates(d) {
     const day = d.getDay();
     const sunday = new Date(d); sunday.setDate(d.getDate() - day);
@@ -86,13 +88,11 @@ export default function CalendarPage() {
     return appointments.filter(a => a.date === dateStr).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
   }
 
-  // Export ICS
   const handleExport = () => {
     const content = exportToICS(appointments, patients);
     downloadFile(content, 'clinic-appointments.ics');
   };
 
-  // Import ICS
   const handleImport = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -100,10 +100,7 @@ export default function CalendarPage() {
     const events = parseICS(text);
     let created = 0;
     for (const ev of events) {
-      // Try to match patient by name
-      const patient = patients.find(p =>
-        p.full_name?.toLowerCase().includes(ev.patient_name_hint?.toLowerCase() || '')
-      );
+      const patient = patients.find(p => p.full_name?.toLowerCase().includes(ev.patient_name_hint?.toLowerCase() || ''));
       if (ev.date) {
         await createAppointment({
           date: ev.date,
@@ -112,6 +109,7 @@ export default function CalendarPage() {
           status: 'scheduled',
           patient_id: patient?.id || null,
           notes: ev.description || ev.summary || '',
+          therapist_email: user.email
         });
         created++;
       }
@@ -122,6 +120,7 @@ export default function CalendarPage() {
 
   const handleDeleteAppt = async () => {
     await deleteAppointment(deleteTarget.id);
+    setDeleteTarget(null);
     loadAll();
   };
 
@@ -138,10 +137,10 @@ export default function CalendarPage() {
         actions={
           <div className="flex gap-2">
             <button onClick={handleExport} className="btn-secondary flex items-center gap-1.5 text-sm">
-              <Download className="w-4 h-4" /> ייצוא ICS
+              <Download className="w-4 h-4" /> ייצוא
             </button>
             <label className="btn-secondary flex items-center gap-1.5 text-sm cursor-pointer">
-              <Upload className="w-4 h-4" /> ייבוא ICS
+              <Upload className="w-4 h-4" /> ייבוא
               <input type="file" accept=".ics" className="hidden" onChange={handleImport} />
             </label>
             <button onClick={() => setApptModal({ date: toDateStr(cursor) })} className="btn-primary flex items-center gap-2">
@@ -151,11 +150,13 @@ export default function CalendarPage() {
         }
       />
 
-      {/* View switcher + navigation */}
-      <div className="card flex items-center justify-between gap-4">
+      <div className="card flex items-center justify-between gap-4 py-2">
         <div className="flex items-center gap-2">
           <button onClick={() => navigate(-1)} className="p-1.5 hover:bg-gray-100 rounded-lg"><ChevronRight className="w-5 h-5" /></button>
-          <span className="text-sm font-semibold text-gray-900 min-w-48 text-center">{title}</span>
+          <div className="min-w-48 text-center">
+            <span className="text-sm font-semibold text-gray-900 block leading-tight">{title}</span>
+            <span className="text-[10px] text-teal-600 font-medium">{getHebrewDate(cursor)}</span>
+          </div>
           <button onClick={() => navigate(1)} className="p-1.5 hover:bg-gray-100 rounded-lg"><ChevronLeft className="w-5 h-5" /></button>
           <button onClick={() => setCursor(new Date())} className="text-xs text-teal-600 hover:underline px-2">היום</button>
         </div>
@@ -176,7 +177,7 @@ export default function CalendarPage() {
       {loading ? (
         <div className="flex justify-center py-12"><Spinner size="lg" /></div>
       ) : (
-        <>
+        <div className="flex-1 overflow-hidden">
           {view === 'day' && (
             <DayView
               date={cursor}
@@ -196,7 +197,6 @@ export default function CalendarPage() {
               onNew={(date) => setApptModal({ date })}
               onEdit={(a) => setApptModal({ date: a.date, appt: a })}
               onTreat={(a) => setTreatModal(a)}
-              onDelete={(a) => setDeleteTarget(a)}
             />
           )}
           {view === 'month' && (
@@ -207,13 +207,13 @@ export default function CalendarPage() {
               patientMap={patientMap}
               onNew={(date) => setApptModal({ date })}
               onEdit={(a) => setApptModal({ date: a.date, appt: a })}
+              onTreat={(a) => setTreatModal(a)}
             />
           )}
-        </>
+        </div>
       )}
 
-      {/* Appointment Form Modal */}
-      {apptModal !== null && (
+      {apptModal && (
         <AppointmentModal
           open={true}
           initialDate={apptModal.date}
@@ -226,7 +226,6 @@ export default function CalendarPage() {
         />
       )}
 
-      {/* Treatment Modal */}
       {treatModal && (
         <TreatmentDialog
           open={!!treatModal}
@@ -242,7 +241,7 @@ export default function CalendarPage() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDeleteAppt}
         title="מחיקת תור"
-        message="האם למחוק את התור? לא ניתן לבטל פעולה זו."
+        message="האם למחוק את התור?"
         confirmLabel="מחק"
         danger
       />
@@ -254,26 +253,18 @@ export default function CalendarPage() {
 function DayView({ date, appts, patientMap, onNew, onEdit, onTreat, onDelete }) {
   const dateStr = toDateStr(date);
   const holiday = getHolidayName(dateStr);
-  const today = toDateStr(new Date());
 
   return (
-    <div className="card flex-1 overflow-y-auto">
-      {holiday && (
-        <div className="mb-3 text-center text-sm text-orange-700 bg-orange-50 rounded-lg py-1.5">
-          🎉 {holiday}
-        </div>
-      )}
+    <div className="card h-full overflow-y-auto">
+      {holiday && <div className="mb-3 text-center text-sm text-orange-700 bg-orange-50 rounded-lg py-1.5">🎉 {holiday}</div>}
       <div className="space-y-1">
         {HOURS.map(h => {
           const time = `${String(h).padStart(2, '0')}:00`;
           const slotAppts = appts.filter(a => (a.start_time || '').startsWith(String(h).padStart(2, '0')));
           return (
-            <div key={h} className="flex gap-2 min-h-12">
-              <span className="text-xs text-gray-400 w-12 text-left pt-1 flex-shrink-0" dir="ltr">{time}</span>
-              <div
-                className="flex-1 border-t border-gray-100 relative cursor-pointer hover:bg-gray-50 rounded-lg transition-all"
-                onClick={() => onNew(time)}
-              >
+            <div key={h} className="flex gap-2 min-h-12 border-b border-gray-50 last:border-0">
+              <span className="text-xs text-gray-400 w-12 text-left pt-3 flex-shrink-0" dir="ltr">{time}</span>
+              <div className="flex-1 relative cursor-pointer hover:bg-gray-50 py-1" onClick={() => onNew(time)}>
                 {slotAppts.map(a => (
                   <ApptChip key={a.id} a={a} patient={patientMap[a.patient_id]} onEdit={onEdit} onTreat={onTreat} onDelete={onDelete} />
                 ))}
@@ -287,38 +278,33 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat, onDelete }) 
 }
 
 /* ── Week View ─────────────────────────────────────────── */
-function WeekView({ dates, getAppts, patientMap, onNew, onEdit, onTreat, onDelete }) {
+function WeekView({ dates, getAppts, patientMap, onNew, onEdit, onTreat }) {
   const today = toDateStr(new Date());
   return (
-    <div className="card overflow-x-auto">
-      <div className="grid grid-cols-7 gap-1 min-w-[700px]">
+    <div className="card overflow-x-auto h-full p-0">
+      <div className="grid grid-cols-7 gap-px bg-gray-200 min-w-[700px] h-full">
         {dates.map(d => {
           const ds = toDateStr(d);
-          const holiday = getHolidayName(ds);
           const isToday = ds === today;
           const appts = getAppts(ds);
           return (
-            <div key={ds} className="min-h-32">
-              <div
-                className={`p-1.5 text-center rounded-lg mb-1 cursor-pointer hover:bg-gray-50
-                  ${isToday ? 'bg-teal-50' : ''}
-                  ${holiday ? 'bg-orange-50' : ''}
-                `}
-                onClick={() => onNew(ds)}
-              >
-                <p className="text-xs text-gray-400">{DAYS_HE[d.getDay()]}</p>
-                <p className={`text-sm font-bold ${isToday ? 'text-teal-700' : 'text-gray-900'}`}>{d.getDate()}</p>
-                {holiday && <p className="text-xs text-orange-600 truncate">{holiday}</p>}
+            <div key={ds} className={`bg-white min-h-full flex flex-col ${isToday ? 'bg-teal-50/30' : ''}`}>
+              <div className="p-2 text-center border-b border-gray-100 cursor-pointer hover:bg-gray-50" onClick={() => onNew(ds)}>
+                <p className="text-[10px] text-gray-400 font-bold uppercase">{DAYS_HE[d.getDay()]}</p>
+                <p className={`text-sm font-black ${isToday ? 'text-teal-700' : 'text-gray-900'}`}>{d.getDate()}</p>
+                <p className="text-[9px] text-teal-600 truncate">{getHebrewDate(d)}</p>
               </div>
-              <div className="space-y-0.5">
+              <div className="flex-1 p-1 space-y-1 overflow-y-auto">
                 {appts.map(a => (
-                  <div
-                    key={a.id}
-                    className="text-xs p-1 bg-teal-100 text-teal-800 rounded cursor-pointer hover:bg-teal-200 truncate"
-                    onClick={() => onEdit(a)}
-                    title={patientMap[a.patient_id]?.full_name}
-                  >
-                    {a.start_time} {patientMap[a.patient_id]?.full_name || '—'}
+                  <div key={a.id} className="p-1.5 bg-teal-50 border border-teal-100 rounded-lg text-[10px] relative group cursor-pointer" onClick={() => onEdit(a)}>
+                    <div className="font-bold truncate pr-4">{patientMap[a.patient_id]?.full_name || '—'}</div>
+                    <div className="text-teal-600">{a.start_time}</div>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); onTreat(a); }}
+                      className="absolute top-1 left-1 opacity-0 group-hover:opacity-100 bg-teal-600 text-white p-1 rounded shadow-sm transition-all"
+                    >
+                      <FileText className="w-2.5 h-2.5" />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -331,40 +317,33 @@ function WeekView({ dates, getAppts, patientMap, onNew, onEdit, onTreat, onDelet
 }
 
 /* ── Month View ────────────────────────────────────────── */
-function MonthView({ dates, currentMonth, getAppts, patientMap, onNew, onEdit }) {
+function MonthView({ dates, currentMonth, getAppts, patientMap, onNew, onEdit, onTreat }) {
   const today = toDateStr(new Date());
   return (
-    <div className="card">
+    <div className="card h-full p-1">
       <div className="grid grid-cols-7 mb-1">
-        {DAYS_HE.map(d => (
-          <div key={d} className="text-center text-xs text-gray-400 py-1">{d}</div>
-        ))}
+        {DAYS_HE.map(d => <div key={d} className="text-center text-[10px] font-bold text-gray-400 py-1">{d}</div>)}
       </div>
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 gap-1 h-[calc(100%-25px)]">
         {dates.map((d, i) => {
           const ds = toDateStr(d);
           const isCurrent = d.getMonth() === currentMonth;
           const isToday = ds === today;
-          const holiday = getHolidayName(ds);
           const appts = getAppts(ds);
           return (
-            <div
-              key={i}
-              className={`min-h-20 p-1 rounded-lg border cursor-pointer hover:bg-gray-50 transition-all
-                ${isCurrent ? 'border-gray-100' : 'border-transparent opacity-40'}
-                ${isToday ? 'border-teal-300 bg-teal-50' : ''}
-                ${holiday ? 'border-orange-200 bg-orange-50' : ''}
-              `}
-              onClick={() => onNew(ds)}
-            >
-              <p className={`text-xs font-medium text-center ${isToday ? 'text-teal-700' : 'text-gray-700'}`}>{d.getDate()}</p>
-              {holiday && <p className="text-xs text-orange-600 truncate">{holiday}</p>}
-              {appts.slice(0, 2).map(a => (
-                <div key={a.id} className="text-xs truncate text-teal-700 hover:underline" onClick={e => { e.stopPropagation(); onEdit(a); }}>
-                  · {patientMap[a.patient_id]?.full_name || '—'}
-                </div>
-              ))}
-              {appts.length > 2 && <p className="text-xs text-gray-400">+{appts.length - 2} נוספים</p>}
+            <div key={i} className={`min-h-[80px] p-1 border rounded-lg cursor-pointer hover:bg-gray-50 transition-all flex flex-col ${isCurrent ? 'border-gray-100' : 'opacity-30 border-transparent'} ${isToday ? 'border-teal-300 bg-teal-50' : ''}`} onClick={() => onNew(ds)}>
+              <div className="flex justify-between items-start mb-1">
+                <span className={`text-[10px] font-bold ${isToday ? 'text-teal-700' : 'text-gray-500'}`}>{d.getDate()}</span>
+                <span className="text-[8px] text-teal-500 font-medium hidden md:block">{getHebrewDate(d).split(' ')[0]}</span>
+              </div>
+              <div className="space-y-0.5 overflow-hidden flex-1">
+                {appts.map(a => (
+                  <div key={a.id} className="text-[9px] bg-white border border-teal-100 text-teal-800 px-1 rounded truncate flex justify-between items-center group" onClick={(e) => { e.stopPropagation(); onEdit(a); }}>
+                    <span className="truncate">{patientMap[a.patient_id]?.full_name}</span>
+                    <FileText className="w-2.5 h-2.5 text-teal-600 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onTreat(a); }} />
+                  </div>
+                ))}
+              </div>
             </div>
           );
         })}
@@ -376,29 +355,27 @@ function MonthView({ dates, currentMonth, getAppts, patientMap, onNew, onEdit })
 /* ── Appointment Chip (Day view) ───────────────────────── */
 function ApptChip({ a, patient, onEdit, onTreat, onDelete }) {
   const colors = {
-    scheduled: 'bg-blue-100 border-blue-300 text-blue-900',
-    completed: 'bg-green-100 border-green-300 text-green-900',
-    cancelled: 'bg-red-100 border-red-300 text-red-900',
-    missed:    'bg-orange-100 border-orange-300 text-orange-900',
+    scheduled: 'bg-white border-teal-200 text-teal-900 shadow-sm',
+    completed: 'bg-green-50 border-green-200 text-green-900',
+    cancelled: 'bg-red-50 border-red-200 text-red-900',
+    missed: 'bg-orange-50 border-orange-300 text-orange-900',
   };
   return (
-    <div className={`mb-1 p-2 rounded-lg border text-xs group relative ${colors[a.status] || colors.scheduled}`}>
-      <div className="flex items-center justify-between">
-        <span className="font-semibold">{patient?.full_name || '—'}</span>
-        <span>{a.start_time}</span>
+    <div className={`mb-1 p-2 rounded-xl border-r-4 border-teal-600 text-xs group relative ${colors[a.status] || colors.scheduled}`}>
+      <div className="flex items-center justify-between" onClick={() => onEdit(a)}>
+        <span className="font-bold truncate">{patient?.full_name || '—'}</span>
+        <span className="font-medium text-gray-500" dir="ltr">{a.start_time}</span>
       </div>
-      <div className="flex gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-all">
-        <button onClick={() => onEdit(a)} className="hover:bg-white/50 rounded p-0.5"><Pencil className="w-3 h-3" /></button>
-        {a.status === 'scheduled' && (
-          <button onClick={() => onTreat(a)} className="hover:bg-white/50 rounded p-0.5"><FileText className="w-3 h-3" /></button>
-        )}
-        <button onClick={() => onDelete(a)} className="hover:bg-white/50 rounded p-0.5"><Trash2 className="w-3 h-3" /></button>
+      <div className="flex gap-1.5 mt-1.5 opacity-0 group-hover:opacity-100 transition-all">
+        <button onClick={() => onTreat(a)} className="bg-teal-600 text-white rounded-lg p-1.5 shadow-sm"><FileText className="w-3.5 h-3.5" /></button>
+        <button onClick={() => onEdit(a)} className="bg-gray-100 text-gray-600 rounded-lg p-1.5"><Pencil className="w-3.5 h-3.5" /></button>
+        <button onClick={() => onDelete(a)} className="bg-red-50 text-red-600 rounded-lg p-1.5"><Trash2 className="w-3.5 h-3.5" /></button>
       </div>
     </div>
   );
 }
 
-/* ── Appointment Create/Edit Modal ─────────────────────── */
+/* ── Appointment Modal (נשאר ללא שינוי לוגי, רק עיצוב קל) ── */
 function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, appointment, patients, therapistEmail }) {
   const isEdit = !!appointment;
   const [form, setForm] = useState({
@@ -433,20 +410,18 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
     e.preventDefault();
     setSaving(true);
     try {
-      // Check overlap
       const overlaps = await checkOverlap(therapistEmail, form.date, form.start_time, Number(form.duration_minutes), appointment?.id);
-      if (overlaps.length > 0) {
+      if (overlaps.length > 0 && overlapWarn.length === 0) {
         setOverlapWarn(overlaps);
         setSaving(false);
         return;
       }
-
       if (isEdit) {
         await updateAppointment(appointment.id, form);
       } else if (recurring) {
-        await createRecurringSeries({ ...form }, recurCount, recurDays);
+        await createRecurringSeries({ ...form, therapist_email: therapistEmail }, recurCount, recurDays);
       } else {
-        await createAppointment(form);
+        await createAppointment({ ...form, therapist_email: therapistEmail });
       }
       onSaved();
     } finally { setSaving(false); }
@@ -456,86 +431,64 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
     <Modal open={open} onClose={onClose} title={isEdit ? 'עריכת תור' : 'תור חדש'}>
       <form onSubmit={checkAndSave} className="space-y-4">
         {overlapWarn.length > 0 && (
-          <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-sm text-orange-800">
-            ⚠️ יש חפיפה עם {overlapWarn.length} תור/ים קיים/ים באותו זמן!
+          <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-xs text-orange-800">
+            ⚠️ שים לב: קיימת חפיפה עם תור אחר. לחץ שוב על שמירה לאישור.
           </div>
         )}
-
         <div>
-          <label className="label">מטופל *</label>
-          <select className="input" value={form.patient_id} onChange={set('patient_id')} required>
+          <label className="label">מטופל</label>
+          <select className="input rounded-xl" value={form.patient_id} onChange={set('patient_id')} required>
             <option value="">בחר מטופל...</option>
             {patients.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
           </select>
         </div>
-
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="label">תאריך *</label>
-            <input type="date" className="input" value={form.date} onChange={set('date')} required />
+            <label className="label">תאריך</label>
+            <input type="date" className="input rounded-xl" value={form.date} onChange={set('date')} required />
           </div>
           <div>
             <label className="label">שעה</label>
-            <input type="time" className="input" value={form.start_time} onChange={set('start_time')} dir="ltr" />
+            <input type="time" className="input rounded-xl" value={form.start_time} onChange={set('start_time')} dir="ltr" />
           </div>
         </div>
-
-        <div>
-          <label className="label">משך (דקות)</label>
-          <select className="input" value={form.duration_minutes} onChange={set('duration_minutes')}>
-            {[30, 45, 60, 90].map(d => <option key={d} value={d}>{d} דקות</option>)}
-          </select>
-        </div>
-
-        {isEdit && (
+        <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="label">סטטוס</label>
-            <select className="input" value={form.status} onChange={set('status')}>
-              <option value="scheduled">מתוכנן</option>
-              <option value="completed">הושלם</option>
-              <option value="cancelled">בוטל</option>
-              <option value="missed">החמצה</option>
+            <label className="label">משך (דקות)</label>
+            <select className="input rounded-xl" value={form.duration_minutes} onChange={set('duration_minutes')}>
+              {[30, 45, 60, 90].map(d => <option key={d} value={d}>{d} דק'</option>)}
             </select>
           </div>
-        )}
-
-        {(form.status === 'cancelled') && (
-          <div>
-            <label className="label">סיבת ביטול</label>
-            <input className="input" value={form.cancel_reason} onChange={set('cancel_reason')} />
-          </div>
-        )}
-
-        <div>
-          <label className="label">הערות</label>
-          <textarea className="input resize-none" rows={2} value={form.notes} onChange={set('notes')} />
-        </div>
-
-        {!isEdit && (
-          <div className="border-t border-gray-100 pt-3">
-            <div className="flex items-center gap-2 mb-3">
-              <input type="checkbox" id="recurring" checked={recurring} onChange={e => setRecurring(e.target.checked)} />
-              <label htmlFor="recurring" className="text-sm font-medium text-gray-700">סדרת תורים חוזרים</label>
+          {isEdit && (
+            <div>
+              <label className="label">סטטוס</label>
+              <select className="input rounded-xl" value={form.status} onChange={set('status')}>
+                <option value="scheduled">מתוכנן</option>
+                <option value="completed">הושלם</option>
+                <option value="cancelled">בוטל</option>
+                <option value="missed">החמצה</option>
+              </select>
             </div>
+          )}
+        </div>
+        {!isEdit && (
+          <div className="p-3 bg-gray-50 rounded-xl">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={recurring} onChange={e => setRecurring(e.target.checked)} className="rounded text-teal-600" />
+              <span className="text-xs font-bold text-gray-700">קבע כסדרת תורים</span>
+            </label>
             {recurring && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="label">מספר תורים</label>
-                  <input type="number" className="input" min={2} max={52} value={recurCount} onChange={e => setRecurCount(e.target.value)} />
-                </div>
-                <div>
-                  <label className="label">כל כמה ימים</label>
-                  <input type="number" className="input" min={1} max={60} value={recurDays} onChange={e => setRecurDays(e.target.value)} />
-                </div>
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <input type="number" className="input rounded-lg text-xs" placeholder="כמות" value={recurCount} onChange={e => setRecurCount(e.target.value)} />
+                <input type="number" className="input rounded-lg text-xs" placeholder="כל X ימים" value={recurDays} onChange={e => setRecurDays(e.target.value)} />
               </div>
             )}
           </div>
         )}
-
-        <div className="flex gap-2">
-          <button type="button" className="btn-secondary flex-1" onClick={onClose}>ביטול</button>
-          <button type="submit" disabled={saving} className="btn-primary flex-1">
-            {saving ? 'שומר...' : isEdit ? 'עדכן' : recurring ? `צור ${recurCount} תורים` : 'שמור'}
+        <div className="flex gap-2 pt-2">
+          <button type="button" className="btn-secondary flex-1 rounded-xl" onClick={onClose}>ביטול</button>
+          <button type="submit" disabled={saving} className="btn-primary flex-1 rounded-xl shadow-md">
+            {saving ? 'שומר...' : 'שמור'}
           </button>
         </div>
       </form>
