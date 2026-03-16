@@ -6,14 +6,14 @@ import {
   deleteAppointment, checkOverlap, createRecurringSeries
 } from '../services/appointments';
 import { getPatients } from '../services/patients';
-import { exportToICS, parseICS, downloadFile } from '../utils/icsUtils';
+import { exportToICS, downloadFile } from '../utils/icsUtils';
 import { getHolidayName } from '../utils/jewishHolidays';
 import { Modal, ConfirmDialog, Spinner } from '../components/ui';
 import TreatmentDialog from '../components/shared/TreatmentDialog';
 import { formatDate } from '../utils/formatters';
 import {
   ChevronRight, ChevronLeft, Plus, Download,
-  Calendar as CalIcon, Clock, FileText, Target
+  Calendar as CalIcon, Clock, FileText, Target, PlusCircle, Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -117,10 +117,7 @@ export default function CalendarPage() {
       : `${MONTHS_HE[cursor.getMonth()]} ${cursor.getFullYear()}`;
 
   return (
-    // תיקון מבני לדסקטופ: min-h במקום גובה קשיח, והסרת overflow-hidden
     <div className="flex flex-col min-h-screen bg-gray-50 p-2 md:p-6 pb-20">
-      
-      {/* Header - הגבלת רוחב */}
       <div className="flex items-center justify-between mb-6 px-2 max-w-7xl mx-auto w-full">
         <div className="flex items-center gap-3">
             <div className="p-2.5 bg-teal-500 rounded-2xl text-white shadow-lg shadow-teal-100">
@@ -146,7 +143,6 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      {/* Navigation - מרכוז והגבלת רוחב */}
       <div className="max-w-7xl mx-auto w-full space-y-4 flex-1 flex flex-col">
         <div className="bg-white rounded-[2rem] p-4 shadow-sm border border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center justify-between md:justify-start md:gap-8 flex-1">
@@ -195,7 +191,6 @@ export default function CalendarPage() {
           </div>
         </div>
 
-        {/* Content Area - גובה גמיש */}
         <div className="flex-1 relative min-h-[600px]">
           <AnimatePresence mode="wait">
             {loading ? (
@@ -218,15 +213,12 @@ export default function CalendarPage() {
                   <WeekView 
                       dates={getWeekDates(cursor)} getAppts={getAppointmentsForDate} patientMap={patientMap}
                       onNew={(date) => setApptModal({ date })} onEdit={(a) => setApptModal({ date: a.date, appt: a })}
-                      onTreat={(a) => setTreatModal(a)}
                   />
                 )}
                 {view === 'month' && (
                   <MonthView 
                       dates={getMonthDates(cursor)} currentMonth={cursor.getMonth()} getAppts={getAppointmentsForDate} patientMap={patientMap}
                       onSelectDay={handleDaySelect}
-                      onEdit={(a) => setApptModal({ date: a.date, appt: a })}
-                      onTreat={(a) => setTreatModal(a)}
                   />
                 )}
               </motion.div>
@@ -235,7 +227,6 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      {/* Modals */}
       {apptModal && (
         <AppointmentModal
           open={true} initialDate={apptModal.date} initialTime={apptModal.time}
@@ -243,12 +234,20 @@ export default function CalendarPage() {
           onClose={() => setApptModal(null)} onSaved={() => { setApptModal(null); loadAll(); }}
         />
       )}
+      
+      {/* תיקון: העברת ה-treatmentId והאובייקט המתאים לדיאלוג הטיפול */}
       {treatModal && (
         <TreatmentDialog
-          open={!!treatModal} appointment={treatModal} patient={patientMap[treatModal.patient_id]}
-          onClose={() => setTreatModal(null)} onSaved={() => { setTreatModal(null); loadAll(); }}
+          open={!!treatModal} 
+          appointmentId={treatModal.id}
+          treatmentId={treatModal.treatment_id} // אם קיים, הדיאלוג ימשוך את הנתונים לעריכה
+          treatment={treatModal.treatment_id ? { id: treatModal.treatment_id } : null}
+          patient={patientMap[treatModal.patient_id]}
+          onClose={() => setTreatModal(null)} 
+          onSaved={() => { setTreatModal(null); loadAll(); }}
         />
       )}
+      
       <ConfirmDialog
         open={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteAppt}
         title="מחיקת תור" message="האם למחוק את התור?" confirmLabel="מחק" danger
@@ -276,9 +275,25 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat }) {
                   <div key={a.id} className="mb-2 p-4 bg-teal-50/50 rounded-3xl border-r-4 border-teal-500 flex justify-between items-center group/item shadow-sm hover:shadow-md transition-all cursor-pointer" onClick={(e) => { e.stopPropagation(); onEdit(a); }}>
                     <div>
                         <div className="font-black text-teal-900 text-base">{patientMap[a.patient_id]?.full_name || '—'}</div>
-                        <div className="text-xs text-teal-600 font-bold mt-1 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> {a.start_time}</div>
+                        <div className="text-xs text-teal-600 font-bold mt-1 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> {a.start_time} ({a.duration_minutes || 45} דק')</div>
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); onTreat(a); }} className="p-3 bg-white rounded-2xl shadow-sm text-teal-600 hover:bg-teal-600 hover:text-white transition-colors"><FileText className="w-5 h-5"/></button>
+                    <div className="flex gap-2">
+                        {/* תיקון: שינוי הטקסט והאייקון אם כבר יש טיפול קיים */}
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); onTreat(a); }} 
+                            className={`p-3 rounded-2xl shadow-sm border transition-all flex items-center gap-2 ${
+                              a.treatment_id 
+                              ? 'bg-amber-50 text-amber-600 border-amber-100 hover:bg-amber-600 hover:text-white' 
+                              : 'bg-white text-teal-600 border-teal-100 hover:bg-teal-600 hover:text-white'
+                            }`}
+                            title={a.treatment_id ? "ערוך תיעוד" : "התחל טיפול"}
+                        >
+                            {a.treatment_id ? <Pencil className="w-5 h-5"/> : <PlusCircle className="w-5 h-5"/>}
+                            <span className="hidden md:inline text-xs font-bold">
+                              {a.treatment_id ? 'ערוך תיעוד' : 'התחל טיפול'}
+                            </span>
+                        </button>
+                    </div>
                   </div>
                 )) : (
                   <div className="h-full w-full rounded-2xl border-2 border-dashed border-transparent hover:border-gray-100 transition-colors cursor-pointer" />
@@ -356,7 +371,7 @@ function MonthView({ dates, currentMonth, getAppts, onSelectDay }) {
               
               <div className="flex gap-1 mt-auto mb-4">
                 {appts.slice(0, 3).map((a, idx) => (
-                    <div key={idx} className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+                    <div key={idx} className={`w-1.5 h-1.5 rounded-full ${a.status === 'completed' ? 'bg-teal-500' : 'bg-teal-300'}`} />
                 ))}
                 {appts.length > 3 && <div className="w-1.5 h-1.5 rounded-full bg-gray-200" />}
               </div>
@@ -368,13 +383,15 @@ function MonthView({ dates, currentMonth, getAppts, onSelectDay }) {
   );
 }
 
-/* ── Appointment Modal (Styled) ───────── */
+/* ── Appointment Modal (נשאר ללא שינוי) ── */
 function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, appointment, patients, therapistEmail }) {
   const isEdit = !!appointment;
   const [form, setForm] = useState({
     patient_id: '', date: initialDate || '', start_time: initialTime || '09:00',
     duration_minutes: 45, notes: '', status: 'scheduled',
   });
+  
+  const [isCustomDuration, setIsCustomDuration] = useState(false);
   const [recurring, setRecurring] = useState(false);
   const [recurCount, setRecurCount] = useState(4);
   const [recurDays, setRecurDays] = useState(7);
@@ -382,9 +399,24 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
   const [overlapWarn, setOverlapWarn] = useState([]);
 
   useEffect(() => {
-    if (appointment) setForm({ ...appointment });
+    if (appointment) {
+      setForm({ ...appointment });
+      if (![30, 45, 60, 90].includes(Number(appointment.duration_minutes))) {
+        setIsCustomDuration(true);
+      }
+    }
     else setForm(f => ({ ...f, date: initialDate || '', start_time: initialTime || '09:00' }));
   }, [open, appointment, initialDate, initialTime]);
+
+  const handleDurationChange = (e) => {
+    const val = e.target.value;
+    if (val === 'custom') {
+      setIsCustomDuration(true);
+    } else {
+      setIsCustomDuration(false);
+      setForm({ ...form, duration_minutes: Number(val) });
+    }
+  };
 
   const checkAndSave = async (e) => {
     e.preventDefault();
@@ -428,12 +460,32 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
             <input type="time" className="w-full bg-gray-50 border-none rounded-2xl h-14 px-4 font-bold text-gray-800" value={form.start_time} onChange={e => setForm({...form, start_time: e.target.value})} required />
           </div>
         </div>
+        
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1">
-             <label className="text-[10px] font-black text-gray-400 mr-2 uppercase">משך (דקות)</label>
-             <select className="w-full bg-gray-50 border-none rounded-2xl h-14 px-4 font-bold text-gray-800" value={form.duration_minutes} onChange={e => setForm({...form, duration_minutes: e.target.value})}>
-               {[30, 45, 60, 90].map(d => <option key={d} value={d}>{d} דק'</option>)}
-             </select>
+              <label className="text-[10px] font-black text-gray-400 mr-2 uppercase">משך (דקות)</label>
+              <div className="space-y-2">
+                <select 
+                    className="w-full bg-gray-50 border-none rounded-2xl h-14 px-4 font-bold text-gray-800" 
+                    value={isCustomDuration ? 'custom' : form.duration_minutes} 
+                    onChange={handleDurationChange}
+                >
+                    {[30, 45, 60, 90].map(d => <option key={d} value={d}>{d} דק'</option>)}
+                    <option value="custom">אחר...</option>
+                </select>
+                {isCustomDuration && (
+                    <motion.input 
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        type="number" 
+                        placeholder="כמה דקות?" 
+                        className="w-full bg-teal-50 border border-teal-100 rounded-xl h-10 px-4 font-bold text-teal-800 text-sm"
+                        value={form.duration_minutes}
+                        onChange={e => setForm({...form, duration_minutes: Number(e.target.value)})}
+                        required
+                    />
+                )}
+              </div>
           </div>
           {isEdit && (
             <div className="space-y-1">
@@ -446,6 +498,7 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
             </div>
           )}
         </div>
+
         {!isEdit && (
           <div className="p-4 bg-gray-50 rounded-[2rem] border border-gray-100">
             <label className="flex items-center gap-3 cursor-pointer">

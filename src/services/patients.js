@@ -41,6 +41,11 @@ export async function getPatient(id) {
   return { id: snap.id, ...snap.data() };
 }
 
+/** * הוספת כינוי כדי למנוע שגיאות Build ב-treatments.js 
+ * שמנסה לייבא את השם הזה
+ */
+export const getPatientById = getPatient;
+
 export async function createPatient(data) {
   const now = serverTimestamp();
   const ref = await addDoc(collection(db, COLLECTION), {

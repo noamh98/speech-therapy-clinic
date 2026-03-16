@@ -28,9 +28,11 @@ export async function getAppointments(therapistEmail, startDate, endDate) {
 }
 
 export async function getPatientAppointments(patientId) {
+  const user = auth.currentUser;
   const q = query(
     collection(db, COLLECTION),
     where('patient_id', '==', patientId),
+    where('therapist_email', '==', user?.email || ''), // הוספת אבטחה
     orderBy('date', 'desc')
   );
   const snap = await getDocs(q);
@@ -52,12 +54,12 @@ export async function checkOverlap(therapistEmail, date, startTime, durationMins
 
   const [sh, sm] = startTime.split(':').map(Number);
   const newStart = sh * 60 + sm;
-  const newEnd = newStart + durationMins;
+  const newEnd = newStart + Number(durationMins); // וידוא שמדובר במספר
 
   return appointments.filter(a => {
     const [ah, am] = a.start_time.split(':').map(Number);
     const aStart = ah * 60 + am;
-    const aEnd = aStart + (a.duration_minutes || 45);
+    const aEnd = aStart + (Number(a.duration_minutes) || 45); // שימוש בזמן הדינמי שנשמר
     return newStart < aEnd && newEnd > aStart;
   });
 }
@@ -116,11 +118,12 @@ export async function deleteAppointment(id) {
   await deleteDoc(doc(db, COLLECTION, id));
 }
 
-/** Delete all future scheduled appointments in a series */
 export async function deleteFutureSeries(seriesId, fromDate) {
+  const user = auth.currentUser;
   const q = query(
     collection(db, COLLECTION),
     where('series_id', '==', seriesId),
+    where('therapist_email', '==', user?.email || ''), // הוספת אבטחה
     where('status', '==', 'scheduled'),
     where('date', '>=', fromDate)
   );
