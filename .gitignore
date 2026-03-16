@@ -1,6 +1,21 @@
+# Dependencies
 node_modules/
 dist/
-.env.local
+
+# Environment variables
 .env
 *.env
+.env.local
+
+# Firebase
 .firebase/
+firestore-debug.log
+ui-debug.log
+
+# Java/Gradle (מה שהופיע ב-status שלך)
+.gradle/
+build/
+
+# IDEs
+.vscode/
+.idea/
