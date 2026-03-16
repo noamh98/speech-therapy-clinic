@@ -3,14 +3,17 @@ import { Modal } from '../ui';
 import { createTreatment, updateTreatment, getNextTreatmentNumber, getTreatment } from '../../services/treatments';
 import { updateAppointment } from '../../services/appointments'; 
 import { getTemplates } from '../../services/templates';
-import { uploadPatientFile } from '../../services/storage';
+import { uploadFileWithProgress } from '../../services/storage'; 
 import { PAYMENT_METHODS, PAYMENT_STATUSES } from '../../utils/formatters';
-import { Upload, Loader2, FileText, X, CheckCircle2 } from 'lucide-react';
+import { Upload, Loader2, FileText, X } from 'lucide-react';
 
-export default function TreatmentDialog({ open, onClose, onSaved, appointment, patient, treatment, treatmentId }) {
-  // קביעה אם מדובר בעריכה: או שיש אובייקט מלא, או שיש לנו ID לשליפה
+export default function TreatmentDialog({ open, onClose, onSaved, appointment, patient, treatment, treatmentId, appointmentId }) {
   const [isEdit, setIsEdit] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
+
+  // appointmentId יכול להגיע כ-prop ישיר (מ-Calendar) או דרך אובייקט appointment
+  // אנחנו נועלים את הערך הזה כאן כדי שלא יוכל להאבד במהלך ה-lifecycle של הקומפוננטה
+  const lockedAppointmentId = appointmentId || appointment?.id || null;
 
   const [form, setForm] = useState({
     date: '',
@@ -23,31 +26,35 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
     description: '',
     progress: '',
     template_id: '',
+    files: [],
+    appointment_id: '' // נעילת מזהה התור בסטייט
   });
 
   const [templates, setTemplates] = useState([]);
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [filesToUpload, setFilesToUpload] = useState([]);
+  const [uploadProgress, setUploadProgress] = useState({});
   const [loading, setLoading] = useState(false);
   const [initialFetchLoading, setInitialFetchLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // טעינה וסינכרון נתונים
   useEffect(() => {
     if (open) {
       loadTemplates();
-      setSelectedFile(null);
+      setFilesToUpload([]);
+      setUploadProgress({});
       
-      const effectiveTreatmentId = treatmentId || treatment?.id;
+      const effectiveTreatmentId = treatmentId || treatment?.id || appointment?.treatment_id;
 
       if (effectiveTreatmentId) {
-        // מצב עריכה - טעינת נתונים מהשרת
         fetchAndFillTreatment(effectiveTreatmentId);
       } else {
-        // מצב חדש
         setIsEdit(false);
+        // lockedAppointmentId כולל גם את appointmentId (prop ישיר) וגם appointment?.id
         setForm({
           date: appointment?.date || today,
           treatment_number: '',
-          amount: '',
+          amount: appointment?.price || '', 
           payment_method: 'cash',
           payment_status: 'unpaid',
           payment_date: '',
@@ -55,6 +62,8 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
           description: '',
           progress: '',
           template_id: '',
+          files: [],
+          appointment_id: lockedAppointmentId || '' // ✅ שימוש ב-ID הנעול
         });
         
         if (patient?.id) {
@@ -64,7 +73,18 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
         }
       }
     }
-  }, [open, treatment, treatmentId, appointment, patient]);
+  }, [open, treatmentId, appointmentId, appointment, patient, today]);
+
+  useEffect(() => {
+    // ✅ תיקון: עדכון payment_date בלבד, ללא נגיעה בשדות אחרים
+    // (השימוש ב-prev state בלבד מונע overwrite של appointment_id)
+    if (form.payment_status === 'paid' && !form.payment_date) {
+      setForm(prev => {
+        // וידוא כפול: appointment_id לא ישתנה לעולם בגלל useEffect הזה
+        return { ...prev, payment_date: prev.date || today };
+      });
+    }
+  }, [form.payment_status]);
 
   async function fetchAndFillTreatment(id) {
     setInitialFetchLoading(true);
@@ -72,21 +92,16 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
       const data = await getTreatment(id);
       if (data) {
         setForm({
+          ...data,
           date: data.date || today,
-          treatment_number: data.treatment_number || '',
-          amount: data.amount || '',
-          payment_method: data.payment_method || 'cash',
-          payment_status: data.payment_status || 'unpaid',
-          payment_date: data.payment_date || '',
-          goals: data.goals || '',
-          description: data.description || '',
-          progress: data.progress || '',
-          template_id: '',
+          files: data.files || [],
+          appointment_id: data.appointment_id || appointment?.id || ''
         });
         setIsEdit(true);
       }
     } catch (err) {
       console.error("Error fetching treatment:", err);
+      setError('לא הצלחנו לטעון את פרטי הטיפול');
     } finally {
       setInitialFetchLoading(false);
     }
@@ -95,62 +110,77 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
   async function loadTemplates() {
     try {
       const t = await getTemplates();
-      setTemplates(t.filter(t => t.type === 'treatment_note' && t.active));
-    } catch {}
+      setTemplates(t.filter(tmp => tmp.type === 'treatment_note' && tmp.active));
+    } catch (err) {
+      console.warn("Templates load failed");
+    }
   }
 
-  const handleTemplateSelect = (templateId) => {
-    const tmpl = templates.find(t => t.id === templateId);
-    if (!tmpl) return;
-    setForm(f => ({
-      ...f,
-      template_id: templateId,
-      goals: tmpl.default_goals || f.goals,
-      description: tmpl.default_description || f.description,
-    }));
+  const handleFileChange = (e) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files);
+      setFilesToUpload(prev => [...prev, ...newFiles]);
+    }
+  };
+
+  const removeFileFromQueue = (index) => {
+    setFilesToUpload(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!patient?.id) return setError('חסר זיהוי מטופל');
+    
     setError('');
     setLoading(true);
 
     try {
-      let fileData = null;
-      if (selectedFile) {
-        fileData = await uploadPatientFile(patient?.id, selectedFile);
+      const newlyUploadedFiles = [];
+      for (const file of filesToUpload) {
+        const uploadedFile = await uploadFileWithProgress(patient.id, file, (percent) => {
+          setUploadProgress(prev => ({ ...prev, [file.name]: percent }));
+        });
+        newlyUploadedFiles.push(uploadedFile);
       }
 
-      const data = {
+      const allFiles = [...(form.files || []), ...newlyUploadedFiles];
+
+      // ✅ שכבת הגנה כפולה: form.appointment_id → lockedAppointmentId (prop) → null
+      // כך גם אם הסטייט נאבד מסיבה כלשהי, ה-prop הישיר מציל אותנו
+      const finalAppointmentId = form.appointment_id || lockedAppointmentId || null;
+
+      const dataToSave = {
         ...form,
         amount: Number(form.amount) || 0,
-        patient_id: patient?.id,
-        patient_name: patient?.full_name,
-        appointment_id: appointment?.id || null,
-        fileData: fileData,
-        receipt_url: fileData ? fileData.url : (treatment?.receipt_url || null)
+        files: allFiles,
+        patient_id: patient.id,
+        patient_name: patient.full_name,
+        appointment_id: finalAppointmentId,
       };
 
-      let finalId = treatmentId || treatment?.id;
+      console.log("Submitting Treatment with data:", dataToSave);
 
-      if (isEdit && finalId) {
-        await updateTreatment(finalId, data);
+      let currentTreatmentId = isEdit ? (treatmentId || treatment?.id || appointment?.treatment_id) : null;
+
+      if (isEdit && currentTreatmentId) {
+        await updateTreatment(currentTreatmentId, dataToSave);
       } else {
-        const result = await createTreatment(data);
-        finalId = result.id;
+        const result = await createTreatment(dataToSave);
+        currentTreatmentId = result.id;
       }
 
-      if (appointment?.id && finalId) {
-        await updateAppointment(appointment.id, {
-          treatment_id: finalId,
+      if (finalAppointmentId && currentTreatmentId) {
+        await updateAppointment(finalAppointmentId, {
+          treatment_id: currentTreatmentId,
           status: 'completed'
         });
       }
 
       onSaved();
+      onClose();
     } catch (err) {
       console.error("Submit error:", err);
-      setError(err.message || 'שגיאה בשמירה');
+      setError('שגיאה בשמירה: ' + (err.message || 'נסה שוב מאוחר יותר'));
     } finally {
       setLoading(false);
     }
@@ -159,41 +189,20 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={isEdit ? 'עריכת תיעוד טיפול' : 'תיעוד טיפול חדש'}
-      maxWidth="max-w-2xl"
-    >
+    <Modal open={open} onClose={onClose} title={isEdit ? 'עריכת תיעוד טיפול' : 'תיעוד טיפול חדש'} maxWidth="max-w-2xl">
       {initialFetchLoading ? (
         <div className="flex flex-col items-center justify-center py-12 gap-3">
           <Loader2 className="w-8 h-8 animate-spin text-teal-600" />
-          <p className="text-sm text-gray-500 font-medium">טוען נתוני תיעוד...</p>
+          <p className="text-sm text-gray-500 font-medium">טוען נתונים...</p>
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="bg-teal-50 rounded-xl p-3 border border-teal-100 flex justify-between items-center">
             <p className="text-sm font-bold text-teal-800">מטופל/ת: {patient?.full_name || '—'}</p>
-            <span className="text-[10px] bg-white text-teal-600 px-2 py-1 rounded-full border border-teal-200 uppercase font-bold">
-              ID: {patient?.id_number || 'N/A'}
+            <span className="text-[10px] bg-white text-teal-600 px-2 py-1 rounded-full border border-teal-200 font-bold">
+              {patient?.id_number || 'ללא ת"ז'}
             </span>
           </div>
-
-          {!isEdit && templates.length > 0 && (
-            <div>
-              <label className="label">תבנית (אופציונלי)</label>
-              <select
-                className="input"
-                value={form.template_id}
-                onChange={e => handleTemplateSelect(e.target.value)}
-              >
-                <option value="">בחר תבנית...</option>
-                {templates.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -202,7 +211,7 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
             </div>
             <div>
               <label className="label">מספר טיפול</label>
-              <input type="number" className="input bg-gray-50" value={form.treatment_number} onChange={set('treatment_number')} readOnly={!isEdit} />
+              <input type="number" className="input bg-gray-50" value={form.treatment_number} readOnly />
             </div>
           </div>
 
@@ -226,106 +235,75 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
           </div>
 
           {form.payment_status === 'paid' && (
-            <div>
-              <label className="label">תאריך תשלום</label>
-              <input type="date" className="input" value={form.payment_date} onChange={set('payment_date')} />
+            <div className="animate-in fade-in slide-in-from-top-1">
+              <label className="label text-teal-700 font-bold">תאריך תשלום</label>
+              <input type="date" className="input border-teal-200 bg-teal-50/30" value={form.payment_date} onChange={set('payment_date')} required />
             </div>
           )}
 
           <div>
             <label className="label">מטרות הטיפול</label>
-            <textarea
-              className="input resize-none"
-              rows={2}
-              value={form.goals}
-              onChange={set('goals')}
-              placeholder="מה המטרות להיום?"
-            />
+            <textarea className="input resize-none" rows={2} value={form.goals} onChange={set('goals')} placeholder="מה המטרות להיום?" />
           </div>
 
           <div>
             <label className="label">תיאור הטיפול *</label>
-            <textarea
-              className="input resize-none"
-              rows={4}
-              value={form.description}
-              onChange={set('description')}
-              placeholder="תאר את מהלך הטיפול..."
-              required
-            />
+            <textarea className="input resize-none" rows={4} value={form.description} onChange={set('description')} placeholder="תאר את מהלך הטיפול..." required />
           </div>
 
           <div>
             <label className="label">הערות התקדמות</label>
-            <textarea
-              className="input resize-none"
-              rows={2}
-              value={form.progress}
-              onChange={set('progress')}
-              placeholder="איך הייתה ההיענות? מה השתפר?"
-            />
+            <textarea className="input resize-none" rows={2} value={form.progress} onChange={set('progress')} placeholder="מה השתפר?" />
           </div>
 
-          <div className="p-4 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
-            <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">קבצים ומסמכים</label>
-            
-            {!selectedFile ? (
-              <div className="flex flex-col gap-2">
-                <label className="flex items-center justify-center gap-2 p-3 bg-white border border-gray-200 rounded-xl cursor-pointer hover:bg-teal-50 hover:border-teal-300 transition-all group">
-                  <Upload className="w-5 h-5 text-gray-400 group-hover:text-teal-500" />
-                  <span className="text-sm font-medium text-gray-600 group-hover:text-teal-700">צרף קובץ, תמונה או סיכום טיפול</span>
-                  <input
-                    type="file"
-                    className="hidden"
-                    onChange={e => setSelectedFile(e.target.files[0])}
-                  />
-                </label>
-                {(treatment?.receipt_url || form.receipt_url) && (
-                  <div className="flex items-center gap-2 text-[11px] text-teal-600 bg-teal-50/50 p-2 rounded-lg">
-                    <CheckCircle2 className="w-3 h-3" />
-                    <span>קיים קובץ שמור במערכת. העלאה חדשה תחליף אותו.</span>
-                  </div>
-                )}
+          {form.files?.length > 0 && (
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-gray-400 uppercase">קבצים מצורפים:</label>
+              <div className="flex flex-wrap gap-2">
+                {form.files.map((file, idx) => (
+                  <a key={idx} href={file.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-white border border-teal-100 px-3 py-1.5 rounded-lg text-xs text-teal-700 hover:bg-teal-50 transition-colors">
+                    <FileText size={12} />
+                    <span className="truncate max-w-[150px]">{file.name}</span>
+                  </a>
+                ))}
               </div>
-            ) : (
-              <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-teal-200 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-teal-50 rounded-lg">
-                    <FileText className="w-5 h-5 text-teal-600" />
+            </div>
+          )}
+
+          <div className="p-4 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+            <label className="flex items-center justify-center gap-2 p-3 bg-white border border-gray-200 rounded-xl cursor-pointer hover:bg-teal-50 transition-all group">
+              <Upload className="w-5 h-5 text-gray-400 group-hover:text-teal-500" />
+              <span className="text-sm font-medium text-gray-600 group-hover:text-teal-700">צרף קבצים חדשים</span>
+              <input type="file" className="hidden" multiple onChange={handleFileChange} />
+            </label>
+
+            {filesToUpload.length > 0 && (
+              <div className="mt-3 space-y-2">
+                {filesToUpload.map((file, idx) => (
+                  <div key={idx} className="bg-white p-2 px-3 rounded-lg border border-teal-100 flex items-center justify-between">
+                    <div className="flex items-center gap-2 truncate">
+                      <FileText size={14} className="text-teal-500" />
+                      <span className="text-xs font-medium truncate">{file.name}</span>
+                    </div>
+                    {loading ? (
+                      <span className="text-[10px] font-bold text-teal-600">{uploadProgress[file.name] || 0}%</span>
+                    ) : (
+                      <button type="button" onClick={() => removeFileFromQueue(idx)} className="text-red-400 hover:bg-red-50 p-1 rounded-full">
+                        <X size={14} />
+                      </button>
+                    )}
                   </div>
-                  <div className="max-w-[200px]">
-                    <p className="text-sm font-bold text-gray-700 truncate">{selectedFile.name}</p>
-                    <p className="text-[10px] text-gray-400">{(selectedFile.size / 1024).toFixed(1)} KB</p>
-                  </div>
-                </div>
-                <button 
-                  type="button"
-                  onClick={() => setSelectedFile(null)} 
-                  className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-full transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                ))}
               </div>
             )}
           </div>
 
-          {error && <p className="text-red-500 text-sm font-medium bg-red-50 p-2 rounded-lg">{error}</p>}
+          {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100 font-medium">{error}</div>}
 
           <div className="flex gap-3 pt-4">
-            <button type="button" className="btn-secondary flex-1 py-3" onClick={onClose}>ביטול</button>
-            <button 
-              type="submit" 
-              disabled={loading} 
-              className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 shadow-lg shadow-teal-100"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span>שומר נתונים...</span>
-                </>
-              ) : (
-                <span>{isEdit ? 'עדכן תיעוד קיים' : 'שמור תיעוד'}</span>
-              )}
+            <button type="button" className="btn-secondary flex-1 py-3" onClick={onClose} disabled={loading}>ביטול</button>
+            <button type="submit" disabled={loading} className="btn-primary flex-1 py-3 flex items-center justify-center gap-2">
+              {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> <span>שומר...</span></> : <span>{isEdit ? 'עדכן תיעוד' : 'שמור תיעוד'}</span>}
             </button>
           </div>
         </form>

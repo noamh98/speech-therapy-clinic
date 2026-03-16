@@ -239,8 +239,9 @@ export default function CalendarPage() {
       {treatModal && (
         <TreatmentDialog
           open={!!treatModal} 
-          appointmentId={treatModal.id}
-          treatmentId={treatModal.treatment_id} // אם קיים, הדיאלוג ימשוך את הנתונים לעריכה
+          appointment={treatModal}              // ✅ תיקון: מעביר את אובייקט התור המלא
+          appointmentId={treatModal.id}         // גם ה-ID הישיר כגיבוי
+          treatmentId={treatModal.treatment_id}
           treatment={treatModal.treatment_id ? { id: treatModal.treatment_id } : null}
           patient={patientMap[treatModal.patient_id]}
           onClose={() => setTreatModal(null)} 

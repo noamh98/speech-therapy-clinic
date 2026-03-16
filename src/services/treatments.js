@@ -1,18 +1,15 @@
-// src/services/treatments.js
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, getDoc,
   getDocs, query, where, serverTimestamp, orderBy, getCountFromServer
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import { updateAppointment } from './appointments';
-import { createNotification } from './notifications';
 import { updatePatient, getPatientById } from './patients';
 
 const COLLECTION = 'treatments';
 
 const getCurrentUserEmail = () => auth.currentUser?.email || '';
 
-/** שליפת טיפול ספציפי לפי ה-ID שלו */
 export async function getTreatment(id) {
   try {
     if (!id) return null;
@@ -28,7 +25,6 @@ export async function getTreatment(id) {
   }
 }
 
-/** שליפת כל הטיפולים של מטופל ספציפי */
 export async function getPatientTreatments(patientId) {
   const email = getCurrentUserEmail();
   const q = query(
@@ -41,7 +37,6 @@ export async function getPatientTreatments(patientId) {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-/** שליפת כל הטיפולים של המטפל */
 export async function getTreatments(therapistEmail) {
   const q = query(
     collection(db, COLLECTION),
@@ -52,9 +47,9 @@ export async function getTreatments(therapistEmail) {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-/** חישוב מספר הטיפול הבא בתור למטופל */
 export async function getNextTreatmentNumber(patientId) {
   const email = getCurrentUserEmail();
+  if (!patientId) return 1;
   const q = query(
     collection(db, COLLECTION),
     where('patient_id', '==', patientId),
@@ -67,112 +62,120 @@ export async function getNextTreatmentNumber(patientId) {
 /** יצירת תיעוד טיפול חדש */
 export async function createTreatment(data) {
   const user = auth.currentUser;
+  if (!user) throw new Error("User not authenticated");
   const now = serverTimestamp();
 
-  // אם לא סופק מספר טיפול, נחשב אותו אוטומטית
   const treatmentNumber = data.treatment_number || (await getNextTreatmentNumber(data.patient_id));
-
-  const ref = await addDoc(collection(db, COLLECTION), {
-    ...data,
-    treatment_number: treatmentNumber,
-    created_by: user?.email || '',
-    therapist_email: user?.email || '',
+  
+  // בנייה בטוחה של האובייקט
+  const treatmentData = {
+    date: data.date || new Date().toISOString().slice(0, 10),
+    treatment_number: Number(treatmentNumber) || 1,
+    patient_id: data.patient_id,
+    patient_name: data.patient_name || '',
+    appointment_id: data.appointment_id || null, // מקבל את ה-ID מהדיאלוג
+    amount: Number(data.amount) || 0,
+    payment_method: data.payment_method || 'cash',
+    payment_status: data.payment_status || 'unpaid',
+    payment_date: data.payment_date || '', // תוקן! תאריך התשלום נשמר
+    goals: data.goals || '',
+    description: data.description || '',
+    progress: data.progress || '',
+    files: data.files || [],
+    therapist_email: user.email,
     created_date: now,
     updated_date: now,
-  });
+  };
 
-  // סנכרון הקובץ לתיק המסמכים של המטופל במידה וקיים
-  if (data.fileData) {
-    try {
-      const patient = await getPatientById(data.patient_id);
-      const currentDocs = patient.documents || [];
-      
-      await updatePatient(data.patient_id, {
-        documents: [...currentDocs, {
-          ...data.fileData,
-          treatment_id: ref.id,
-          source: 'treatment',
-          created_at: new Date().toISOString()
-        }]
-      });
-    } catch (err) {
-      console.warn('Document sync to patient failed:', err);
-    }
-  }
-
-  // עדכון הסטטוס של התור המקושר
-  if (data.appointment_id) {
-    await updateAppointment(data.appointment_id, { 
-      status: 'completed',
-      treatment_id: ref.id 
-    });
-  } else if (data.patient_id && data.date) {
-    // אם לא נשלח ID של תור, ננסה למצוא תור מתאים לפי תאריך ולחבר ביניהם
-    await autoLinkAppointment(data.patient_id, data.date, ref.id, user?.email);
-  }
-
-  // התראה בטיפול ה-9 (לצורך הערכת מצב לקראת הטיפול ה-10)
-  if (treatmentNumber === 9) {
-    await createNotification({
-      type: 'follow_up',
-      recipient_email: user?.email,
-      patient_id: data.patient_id,
-      patient_name: data.patient_name,
-      subject: `מטופל ${data.patient_name} הגיע לטיפול ה-9`,
-      message: `המטופל/ת ${data.patient_name} השלים/ה 9 טיפולים. מומלץ לבחון צרכים ויעדים לקראת המשך הטיפול.`,
-      channel: 'email',
-    });
-  }
-
-  return { id: ref.id, treatment_number: treatmentNumber };
-}
-
-/** חיבור אוטומטי של טיפול לתור קיים ביומן */
-async function autoLinkAppointment(patientId, date, treatmentId, therapistEmail) {
   try {
-    const apptQuery = query(
-      collection(db, 'appointments'),
-      where('patient_id', '==', patientId),
-      where('therapist_email', '==', therapistEmail),
-      where('date', '==', date),
-      where('status', '==', 'scheduled')
-    );
-    const apptSnap = await getDocs(apptQuery);
-    if (!apptSnap.empty) {
-      const appt = apptSnap.docs[0];
-      await updateAppointment(appt.id, {
-        status: 'completed',
-        treatment_id: treatmentId, // תיקון ל-treatment_id במקום linked_treatment_id לעקביות
+    const ref = await addDoc(collection(db, COLLECTION), treatmentData);
+
+    // עדכון התור ביומן אם קיים ID
+    if (treatmentData.appointment_id) {
+      await updateAppointment(treatmentData.appointment_id, {
+        treatment_id: ref.id,
+        status: 'completed'
       });
     }
-  } catch (e) {
-    console.warn('Auto-link appointment failed:', e);
+
+    if (treatmentData.files.length > 0) {
+      for (const file of treatmentData.files) {
+        await syncFileToPatient(treatmentData.patient_id, { ...file, treatment_id: ref.id });
+      }
+    }
+
+    return { id: ref.id, ...treatmentData };
+  } catch (error) {
+    console.error("Error in createTreatment:", error);
+    throw error;
   }
 }
 
 /** עדכון תיעוד קיים */
 export async function updateTreatment(id, data) {
   const docRef = doc(db, COLLECTION, id);
-  await updateDoc(docRef, {
-    ...data,
-    updated_date: serverTimestamp(),
-  });
+  const now = serverTimestamp();
+
+  const { id: _, created_date, therapist_email, ...updateData } = data;
+
+  const finalUpdate = {
+    ...updateData,
+    amount: Number(updateData.amount) || 0,
+    updated_date: now
+  };
+
+  try {
+    await updateDoc(docRef, finalUpdate);
+
+    if (data.files && data.files.length > 0) {
+      for (const file of data.files) {
+        await syncFileToPatient(data.patient_id, { ...file, treatment_id: id });
+      }
+    }
+
+    return { id, ...data };
+  } catch (error) {
+    console.error("Error in updateTreatment:", error);
+    throw error;
+  }
 }
 
-/** מחיקת תיעוד */
+async function syncFileToPatient(patientId, fileInfo) {
+  try {
+    if (!patientId) return;
+    const patient = await getPatientById(patientId);
+    if (!patient) return;
+    
+    const currentDocs = patient.documents || [];
+    const exists = currentDocs.some(d => d.url === fileInfo.url);
+    
+    if (!exists) {
+      await updatePatient(patientId, {
+        documents: [...currentDocs, { 
+          ...fileInfo, 
+          source: 'treatment', 
+          created_at: new Date().toISOString() 
+        }]
+      });
+    }
+  } catch (err) {
+    console.warn('Document sync failed:', err);
+  }
+}
+
 export async function deleteTreatment(id) {
   await deleteDoc(doc(db, COLLECTION, id));
 }
 
-/** קבלת כמות הטיפולים הכוללת של מטופל */
 export async function getPatientTreatmentCount(patientId) {
   const email = getCurrentUserEmail();
   const q = query(
-    collection(db, COLLECTION),
-    where('patient_id', '==', patientId),
+    collection(db, COLLECTION), 
+    where('patient_id', '==', patientId), 
     where('therapist_email', '==', email)
   );
   const snap = await getCountFromServer(q);
   return snap.data().count;
 }
+
 export const getTreatmentById = getTreatment;
