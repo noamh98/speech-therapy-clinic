@@ -9,10 +9,16 @@ import { createNotification } from './notifications';
 
 const COLLECTION = 'treatments';
 
+/** * פונקציית עזר לקבלת המייל של המשתמש המחובר 
+ */
+const getCurrentUserEmail = () => auth.currentUser?.email || '';
+
 export async function getPatientTreatments(patientId) {
+  const email = getCurrentUserEmail();
   const q = query(
     collection(db, COLLECTION),
     where('patient_id', '==', patientId),
+    where('therapist_email', '==', email), // הוספת אבטחה
     orderBy('treatment_number', 'desc')
   );
   const snap = await getDocs(q);
@@ -30,9 +36,11 @@ export async function getTreatments(therapistEmail) {
 }
 
 export async function getNextTreatmentNumber(patientId) {
+  const email = getCurrentUserEmail();
   const q = query(
     collection(db, COLLECTION),
-    where('patient_id', '==', patientId)
+    where('patient_id', '==', patientId),
+    where('therapist_email', '==', email) // הוספת אבטחה
   );
   const snap = await getDocs(q);
   return snap.size + 1;
@@ -54,14 +62,12 @@ export async function createTreatment(data) {
     updated_date: now,
   });
 
-  // Business rule 4.1: Auto-link to scheduled appointment on same date
   if (data.appointment_id) {
     await updateAppointment(data.appointment_id, { status: 'completed' });
   } else if (data.patient_id && data.date) {
     await autoLinkAppointment(data.patient_id, data.date, ref.id, user?.email);
   }
 
-  // Business rule 4.2: 9th treatment notification
   if (treatmentNumber === 9) {
     await createNotification({
       type: 'follow_up',
@@ -83,6 +89,7 @@ async function autoLinkAppointment(patientId, date, treatmentId, therapistEmail)
     const apptQuery = q(
       col(db, 'appointments'),
       w('patient_id', '==', patientId),
+      w('therapist_email', '==', therapistEmail), // הוספת אבטחה לאוטומציה
       w('date', '==', date),
       w('status', '==', 'scheduled')
     );
@@ -110,11 +117,14 @@ export async function deleteTreatment(id) {
   await deleteDoc(doc(db, COLLECTION, id));
 }
 
-/** Get treatment count for a patient */
+/** * השאילתה שגרמה לשגיאת AggregationQuery
+ */
 export async function getPatientTreatmentCount(patientId) {
+  const email = getCurrentUserEmail();
   const q = query(
     collection(db, COLLECTION),
-    where('patient_id', '==', patientId)
+    where('patient_id', '==', patientId),
+    where('therapist_email', '==', email) // התיקון הקריטי כאן
   );
   const snap = await getCountFromServer(q);
   return snap.data().count;

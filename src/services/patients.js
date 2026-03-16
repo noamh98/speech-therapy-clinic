@@ -49,7 +49,7 @@ export async function createPatient(data) {
     created_date: now,
     updated_date: now,
     status: data.status || 'active',
-    is_archived: false, // שדה חדש
+    is_archived: false,
     portal_access_enabled: data.portal_access_enabled || false,
   });
   return ref.id;
@@ -83,9 +83,12 @@ export async function deletePatient(patientId) {
     // 2. מציאת כל התורים העתידיים של המטופל למחיקה
     const today = new Date().toISOString().slice(0, 10);
     const apptsRef = collection(db, 'appointments');
+    
+    // התיקון כאן: הוספנו את therapist_email כדי לעמוד בחוקי האבטחה
     const q = query(
       apptsRef, 
       where('patient_id', '==', patientId),
+      where('therapist_email', '==', user.email),
       where('date', '>=', today)
     );
     
@@ -113,6 +116,7 @@ export function validateIsraeliId(id) {
   }
   return sum % 10 === 0;
 }
+
 /**
  * שחזור מטופל מהארכיון
  */
