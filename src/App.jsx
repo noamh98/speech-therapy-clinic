@@ -1,6 +1,9 @@
 // src/App.jsx
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+// הוספנו את השורה הזו כאן למטה:
+import { ClinicDataProvider } from './context/useClinicData'; 
+
 import AppLayout from './components/layout/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -64,7 +67,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        {/* עטפנו את AppRoutes ב-ClinicDataProvider החדש */}
+        <ClinicDataProvider>
+          <AppRoutes />
+        </ClinicDataProvider>
       </AuthProvider>
     </BrowserRouter>
   );

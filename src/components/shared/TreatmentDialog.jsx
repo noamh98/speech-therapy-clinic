@@ -1,18 +1,19 @@
+// src/components/treatments/TreatmentDialog.jsx
 import { useState, useEffect } from 'react';
 import { Modal } from '../ui';
-import { createTreatment, updateTreatment, getNextTreatmentNumber, getTreatment } from '../../services/treatments';
+import { useClinicData } from '../../context/useClinicData'; // הוספת ה-Hook לניהול הסטייט הגלובלי
+import { createTreatment, updateTreatment, getNextTreatmentNumber, getTreatment, deleteTreatment } from '../../services/treatments';
 import { updateAppointment } from '../../services/appointments'; 
 import { getTemplates } from '../../services/templates';
 import { uploadFileWithProgress } from '../../services/storage'; 
 import { PAYMENT_METHODS, PAYMENT_STATUSES } from '../../utils/formatters';
-import { Upload, Loader2, FileText, X } from 'lucide-react';
+import { Upload, Loader2, FileText, X, Trash2 } from 'lucide-react'; // הוספת Trash2 למחיקה
 
 export default function TreatmentDialog({ open, onClose, onSaved, appointment, patient, treatment, treatmentId, appointmentId }) {
+  const { setTreatments, setPatients } = useClinicData(); // גישה לעדכון הנתונים בזמן אמת
   const [isEdit, setIsEdit] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
 
-  // appointmentId יכול להגיע כ-prop ישיר (מ-Calendar) או דרך אובייקט appointment
-  // אנחנו נועלים את הערך הזה כאן כדי שלא יוכל להאבד במהלך ה-lifecycle של הקומפוננטה
   const lockedAppointmentId = appointmentId || appointment?.id || null;
 
   const [form, setForm] = useState({
@@ -27,7 +28,7 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
     progress: '',
     template_id: '',
     files: [],
-    appointment_id: '' // נעילת מזהה התור בסטייט
+    appointment_id: ''
   });
 
   const [templates, setTemplates] = useState([]);
@@ -37,7 +38,6 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
   const [initialFetchLoading, setInitialFetchLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // טעינה וסינכרון נתונים
   useEffect(() => {
     if (open) {
       loadTemplates();
@@ -50,7 +50,6 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
         fetchAndFillTreatment(effectiveTreatmentId);
       } else {
         setIsEdit(false);
-        // lockedAppointmentId כולל גם את appointmentId (prop ישיר) וגם appointment?.id
         setForm({
           date: appointment?.date || today,
           treatment_number: '',
@@ -63,7 +62,7 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
           progress: '',
           template_id: '',
           files: [],
-          appointment_id: lockedAppointmentId || '' // ✅ שימוש ב-ID הנעול
+          appointment_id: lockedAppointmentId || ''
         });
         
         if (patient?.id) {
@@ -76,13 +75,8 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
   }, [open, treatmentId, appointmentId, appointment, patient, today]);
 
   useEffect(() => {
-    // ✅ תיקון: עדכון payment_date בלבד, ללא נגיעה בשדות אחרים
-    // (השימוש ב-prev state בלבד מונע overwrite של appointment_id)
     if (form.payment_status === 'paid' && !form.payment_date) {
-      setForm(prev => {
-        // וידוא כפול: appointment_id לא ישתנה לעולם בגלל useEffect הזה
-        return { ...prev, payment_date: prev.date || today };
-      });
+      setForm(prev => ({ ...prev, payment_date: prev.date || today }));
     }
   }, [form.payment_status]);
 
@@ -127,6 +121,36 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
     setFilesToUpload(prev => prev.filter((_, i) => i !== index));
   };
 
+  // פונקציית מחיקה חדשה ומסונכרנת
+  const handleDelete = async () => {
+    const currentTreatmentId = treatmentId || treatment?.id || form.id;
+    if (!currentTreatmentId || !window.confirm('האם אתה בטוח שברצונך למחוק את תיעוד הטיפול? פעולה זו תסיר את הטיפול מהחישובים בדשבורד.')) return;
+
+    setLoading(true);
+    try {
+      await deleteTreatment(currentTreatmentId, patient?.id);
+
+      // עדכון ה-State הגלובלי - זה מה שמתקן את הדשבורד!
+      setTreatments(prev => prev.filter(t => t.id !== currentTreatmentId));
+      
+      if (patient?.id) {
+        setPatients(prev => prev.map(p => 
+          p.id === patient.id 
+            ? { ...p, treatment_count: Math.max(0, (p.treatment_count || 1) - 1) } 
+            : p
+        ));
+      }
+
+      onSaved();
+      onClose();
+    } catch (err) {
+      console.error("Delete error:", err);
+      setError('שגיאה במחיקת הטיפול');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!patient?.id) return setError('חסר זיהוי מטופל');
@@ -144,9 +168,6 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
       }
 
       const allFiles = [...(form.files || []), ...newlyUploadedFiles];
-
-      // ✅ שכבת הגנה כפולה: form.appointment_id → lockedAppointmentId (prop) → null
-      // כך גם אם הסטייט נאבד מסיבה כלשהי, ה-prop הישיר מציל אותנו
       const finalAppointmentId = form.appointment_id || lockedAppointmentId || null;
 
       const dataToSave = {
@@ -158,15 +179,17 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
         appointment_id: finalAppointmentId,
       };
 
-      console.log("Submitting Treatment with data:", dataToSave);
-
-      let currentTreatmentId = isEdit ? (treatmentId || treatment?.id || appointment?.treatment_id) : null;
+      let currentTreatmentId = isEdit ? (treatmentId || treatment?.id || appointment?.treatment_id || form.id) : null;
+      let savedTreatment;
 
       if (isEdit && currentTreatmentId) {
-        await updateTreatment(currentTreatmentId, dataToSave);
+        savedTreatment = await updateTreatment(currentTreatmentId, dataToSave);
+        // עדכון אופטימי ב-Context
+        setTreatments(prev => prev.map(t => t.id === currentTreatmentId ? { ...t, ...dataToSave, id: currentTreatmentId } : t));
       } else {
-        const result = await createTreatment(dataToSave);
-        currentTreatmentId = result.id;
+        savedTreatment = await createTreatment(dataToSave);
+        // הוספה אופטימית ב-Context
+        setTreatments(prev => [savedTreatment, ...prev]);
       }
 
       if (finalAppointmentId && currentTreatmentId) {
@@ -199,9 +222,15 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="bg-teal-50 rounded-xl p-3 border border-teal-100 flex justify-between items-center">
             <p className="text-sm font-bold text-teal-800">מטופל/ת: {patient?.full_name || '—'}</p>
-            <span className="text-[10px] bg-white text-teal-600 px-2 py-1 rounded-full border border-teal-200 font-bold">
-              {patient?.id_number || 'ללא ת"ז'}
-            </span>
+            {isEdit && (
+              <button 
+                type="button" 
+                onClick={handleDelete}
+                className="flex items-center gap-1 text-red-500 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors text-xs font-bold"
+              >
+                <Trash2 size={14} /> מחק תיעוד
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">

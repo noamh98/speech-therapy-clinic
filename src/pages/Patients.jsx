@@ -1,5 +1,5 @@
 // src/pages/Patients.jsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { 
@@ -8,13 +8,15 @@ import {
   updatePatient, 
   deletePatient, 
   validateIsraeliId,
-  restorePatient // וודא שהוספת את זה גם ב-Service
+  restorePatient
 } from '../services/patients';
-import { getPatientTreatmentCount } from '../services/treatments';
+// NOTE: getPatientTreatmentCount removed — treatment_count is now a
+// denormalized field on each patient document (set by createPatient).
+// This eliminates the N+1 pattern: 30 patients = 1 query, not 31.
 import { PageHeader, EmptyState, Modal, ConfirmDialog, Spinner, Badge } from '../components/ui';
 import { 
-  Users, Plus, Search, Pencil, Trash2, ChevronLeft, 
-  Phone, Mail, Archive, UserCheck 
+  Users, Plus, Search, Pencil, Archive, ChevronLeft, 
+  Phone, UserCheck, AlertCircle
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { PATIENT_STATUSES } from '../utils/formatters';
@@ -41,31 +43,34 @@ export default function Patients() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  const [pageError, setPageError] = useState('');
 
   useEffect(() => { load(); }, [user, showArchived]);
 
   async function load() {
     if (!user?.email) return;
     setLoading(true);
+    setPageError('');
     try {
-      // שליפת מטופלים (כולל/לא כולל ארכיון לפי המצב)
+      // FIX: treatment_count is now a denormalized field on each patient document.
+      // No more N+1: 30 patients = 1 Firestore read, not 31.
       const p = await getPatients(user.email, showArchived);
-      
-      const withCounts = await Promise.all(p.map(async pt => ({
-        ...pt,
-        treatment_count: await getPatientTreatmentCount(pt.id),
-      })));
-      setPatients(withCounts);
+      setPatients(p);
+    } catch (err) {
+      setPageError('שגיאה בטעינת רשימת המטופלים. נסה לרענן את הדף.');
+      console.error('[Patients] load error:', err);
     } finally { setLoading(false); }
   }
 
-  const filtered = patients.filter(p => {
+  // useMemo: filtered list only recomputes when patients/search/statusFilter change,
+  // not on every render (e.g. when a modal opens).
+  const filtered = useMemo(() => patients.filter(p => {
     const matchSearch = !search ||
       p.full_name?.toLowerCase().includes(search.toLowerCase()) ||
       p.phone?.includes(search);
     const matchStatus = statusFilter === 'all' || p.status === statusFilter;
     return matchSearch && matchStatus;
-  });
+  }), [patients, search, statusFilter]);
 
   const openAdd = () => { setEditPatient(null); setForm(EMPTY_FORM); setErrors({}); setFormOpen(true); };
   const openEdit = (pt) => { setEditPatient(pt); setForm({ ...EMPTY_FORM, ...pt }); setErrors({}); setFormOpen(true); };
@@ -101,7 +106,10 @@ export default function Patients() {
       setDeleteTarget(null);
       load();
     } catch (err) {
-      alert(err.message);
+      // FIX: replaced alert() with inline error — alert() blocks the UI thread
+      // and looks broken on mobile.
+      setPageError(err.message || 'שגיאה בהעברה לארכיון. נסה שוב.');
+      setDeleteTarget(null);
     }
   };
 
@@ -110,7 +118,7 @@ export default function Patients() {
       await restorePatient(id);
       load();
     } catch (err) {
-      alert(err.message);
+      setPageError(err.message || 'שגיאה בשחזור מטופל. נסה שוב.');
     }
   };
 
@@ -159,6 +167,15 @@ export default function Patients() {
           </select>
         )}
       </div>
+
+      {/* Inline error banner - replaces alert() calls throughout this page */}
+      {pageError && (
+        <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-red-700 text-sm">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{pageError}</span>
+          <button onClick={() => setPageError('')} className="mr-auto text-red-400 hover:text-red-600 text-xs underline">סגור</button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-12"><Spinner size="lg" /></div>

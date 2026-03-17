@@ -1,10 +1,11 @@
+// src/services/treatments.js
 import {
   collection, doc, addDoc, updateDoc, deleteDoc, getDoc,
   getDocs, query, where, serverTimestamp, orderBy, getCountFromServer
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import { updateAppointment } from './appointments';
-import { updatePatient, getPatientById } from './patients';
+import { updatePatient, getPatientById, incrementTreatmentCount } from './patients';
 
 const COLLECTION = 'treatments';
 
@@ -67,17 +68,16 @@ export async function createTreatment(data) {
 
   const treatmentNumber = data.treatment_number || (await getNextTreatmentNumber(data.patient_id));
   
-  // בנייה בטוחה של האובייקט
   const treatmentData = {
     date: data.date || new Date().toISOString().slice(0, 10),
     treatment_number: Number(treatmentNumber) || 1,
     patient_id: data.patient_id,
     patient_name: data.patient_name || '',
-    appointment_id: data.appointment_id || null, // מקבל את ה-ID מהדיאלוג
+    appointment_id: data.appointment_id || null,
     amount: Number(data.amount) || 0,
     payment_method: data.payment_method || 'cash',
     payment_status: data.payment_status || 'unpaid',
-    payment_date: data.payment_date || '', // תוקן! תאריך התשלום נשמר
+    payment_date: data.payment_date || '',
     goals: data.goals || '',
     description: data.description || '',
     progress: data.progress || '',
@@ -90,7 +90,10 @@ export async function createTreatment(data) {
   try {
     const ref = await addDoc(collection(db, COLLECTION), treatmentData);
 
-    // עדכון התור ביומן אם קיים ID
+    // עדכון מונה טיפולים למטופל (+1)
+    await incrementTreatmentCount(treatmentData.patient_id, 1);
+
+    // עדכון התור ביומן לסטטוס 'הושלם'
     if (treatmentData.appointment_id) {
       await updateAppointment(treatmentData.appointment_id, {
         treatment_id: ref.id,
@@ -116,11 +119,12 @@ export async function updateTreatment(id, data) {
   const docRef = doc(db, COLLECTION, id);
   const now = serverTimestamp();
 
+  // הוצאת שדות שלא אמורים להתעדכן
   const { id: _, created_date, therapist_email, ...updateData } = data;
 
   const finalUpdate = {
     ...updateData,
-    amount: Number(updateData.amount) || 0,
+    amount: Number(updateData.amount) || 0, // הבטחה שהסכום נשמר כמספר
     updated_date: now
   };
 
@@ -163,8 +167,22 @@ async function syncFileToPatient(patientId, fileInfo) {
   }
 }
 
-export async function deleteTreatment(id) {
-  await deleteDoc(doc(db, COLLECTION, id));
+/** מחיקת טיפול ועדכון מונים */
+export async function deleteTreatment(id, patientId) {
+  try {
+    // 1. מחיקת הטיפול מהקולקציה
+    await deleteDoc(doc(db, COLLECTION, id));
+    
+    // 2. עדכון מונה הטיפולים אצל המטופל (-1)
+    if (patientId) {
+      await incrementTreatmentCount(patientId, -1);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error("Error deleting treatment:", error);
+    throw error;
+  }
 }
 
 export async function getPatientTreatmentCount(patientId) {

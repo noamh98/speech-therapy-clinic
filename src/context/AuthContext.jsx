@@ -12,7 +12,8 @@ import { auth, db } from '../services/firebase';
 
 const AuthContext = createContext(null);
 
-export const ADMIN_EMAIL = 'noamh98@gmail.com';
+// FIX: moved personal email out of source code. Set VITE_ADMIN_EMAIL in your .env file.
+export const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || '';
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);

@@ -13,7 +13,7 @@ import TreatmentDialog from '../components/shared/TreatmentDialog';
 import { formatDate } from '../utils/formatters';
 import {
   ChevronRight, ChevronLeft, Plus, Download,
-  Calendar as CalIcon, Clock, FileText, Target, PlusCircle, Pencil
+  Calendar as CalIcon, Clock, Target, PlusCircle, Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -235,12 +235,11 @@ export default function CalendarPage() {
         />
       )}
       
-      {/* תיקון: העברת ה-treatmentId והאובייקט המתאים לדיאלוג הטיפול */}
       {treatModal && (
         <TreatmentDialog
           open={!!treatModal} 
-          appointment={treatModal}              // ✅ תיקון: מעביר את אובייקט התור המלא
-          appointmentId={treatModal.id}         // גם ה-ID הישיר כגיבוי
+          appointment={treatModal}
+          appointmentId={treatModal.id}
           treatmentId={treatModal.treatment_id}
           treatment={treatModal.treatment_id ? { id: treatModal.treatment_id } : null}
           patient={patientMap[treatModal.patient_id]}
@@ -279,7 +278,6 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat }) {
                         <div className="text-xs text-teal-600 font-bold mt-1 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> {a.start_time} ({a.duration_minutes || 45} דק')</div>
                     </div>
                     <div className="flex gap-2">
-                        {/* תיקון: שינוי הטקסט והאייקון אם כבר יש טיפול קיים */}
                         <button 
                             onClick={(e) => { e.stopPropagation(); onTreat(a); }} 
                             className={`p-3 rounded-2xl shadow-sm border transition-all flex items-center gap-2 ${
@@ -384,7 +382,7 @@ function MonthView({ dates, currentMonth, getAppts, onSelectDay }) {
   );
 }
 
-/* ── Appointment Modal (נשאר ללא שינוי) ── */
+/* ── Appointment Modal ── */
 function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, appointment, patients, therapistEmail }) {
   const isEdit = !!appointment;
   const [form, setForm] = useState({
