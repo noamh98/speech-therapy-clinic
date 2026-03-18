@@ -129,24 +129,42 @@ async function callGemini(messages, systemPrompt) {
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    
+    // Initialize model with systemInstruction (recommended for Gemini 1.5)
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-1.5-flash',
+      systemInstruction: systemPrompt,
+    });
 
     // Build conversation history for Gemini
-    // Gemini expects alternating user/model messages
+    // Gemini requires: history must start with 'user' role
     const conversationHistory = messages.map(msg => ({
       role: msg.role === 'user' ? 'user' : 'model',
       parts: [{ text: msg.content }],
     }));
 
-    // Start a chat session with the system prompt
+    // Filter out the initial assistant greeting from history
+    // Keep only user messages and assistant responses after the first message
+    let historyToUse = conversationHistory.filter((msg, idx) => {
+      // Skip the first message if it's from assistant (the greeting)
+      if (idx === 0 && msg.role === 'model') return false;
+      return true;
+    });
+
+    // Ensure history starts with 'user' message
+    // If first message is still from model, skip it
+    if (historyToUse.length > 0 && historyToUse[0].role === 'model') {
+      historyToUse = historyToUse.slice(1);
+    }
+
+    // Start a chat session with the conversation history (all but the last message)
     const chat = model.startChat({
-      history: conversationHistory.slice(0, -1), // All but the last message
-      systemInstruction: systemPrompt,
+      history: historyToUse.slice(0, -1),
     });
 
     // Send the last user message
-    const lastMessage = conversationHistory[conversationHistory.length - 1];
-    if (lastMessage.role !== 'user') {
+    const lastMessage = historyToUse[historyToUse.length - 1];
+    if (!lastMessage || lastMessage.role !== 'user') {
       throw new Error('Last message must be from user');
     }
 
@@ -169,6 +187,9 @@ async function callGemini(messages, systemPrompt) {
     }
     if (err.message?.includes('429')) {
       throw new Error('Rate limited by Gemini API. Please try again in a moment.');
+    }
+    if (err.message?.includes('First content should be with role')) {
+      throw new Error('Chat history format error. Please try again or refresh the page.');
     }
     throw new Error(err.message || 'Failed to get response from Gemini API');
   }
