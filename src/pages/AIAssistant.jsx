@@ -1,4 +1,4 @@
-// src/pages/AIAssistant.jsx — AI Assistant with full clinic context
+// src/pages/AIAssistant.jsx — AI Assistant with Google Gemini 1.5 Flash
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { PageHeader, Spinner } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
@@ -9,8 +9,9 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'framer-motion';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// ─── Suggested prompts (grouped by category) ─────────────────────────────────
+// ─── Suggested prompts (grouped by category) ─────────────────────────────
 const SUGGESTED_GROUPS = [
   {
     label: 'תיעוד קליני',
@@ -118,40 +119,59 @@ ${todayList}
 - **מקורות מקצועיים:** בשאלות קליניות, הסתמך על הנחיות ASHA, ICF, ותקנות משרד הבריאות הישראלי`;
 }
 
-// ─── OpenAI API call ──────────────────────────────────────────────────────────
-async function callOpenAI(messages, systemPrompt) {
-  const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
-  const baseURL = import.meta.env.VITE_OPENAI_BASE_URL || 'https://api.openai.com/v1';
+// ─── Google Gemini API call ──────────────────────────────────────────────────
+async function callGemini(messages, systemPrompt) {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
   if (!apiKey) {
-    throw new Error('VITE_OPENAI_API_KEY is not set in .env');
+    throw new Error('VITE_GEMINI_API_KEY is not set in .env. Get a free key from https://ai.google.dev/');
   }
 
-  const response = await fetch(`${baseURL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4.1-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...messages,
-      ],
-      temperature: 0.7,
-      max_tokens: 1500,
-      stream: false,
-    }),
-  });
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `API error: ${response.status}`);
+    // Build conversation history for Gemini
+    // Gemini expects alternating user/model messages
+    const conversationHistory = messages.map(msg => ({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.content }],
+    }));
+
+    // Start a chat session with the system prompt
+    const chat = model.startChat({
+      history: conversationHistory.slice(0, -1), // All but the last message
+      systemInstruction: systemPrompt,
+    });
+
+    // Send the last user message
+    const lastMessage = conversationHistory[conversationHistory.length - 1];
+    if (lastMessage.role !== 'user') {
+      throw new Error('Last message must be from user');
+    }
+
+    const result = await chat.sendMessage(lastMessage.parts[0].text);
+    const responseText = result.response.text();
+
+    if (!responseText) {
+      throw new Error('Empty response from Gemini');
+    }
+
+    return responseText;
+  } catch (err) {
+    console.error('Gemini API error:', err);
+    // Re-throw with a user-friendly message
+    if (err.message?.includes('API key')) {
+      throw new Error('API key not configured. Please add VITE_GEMINI_API_KEY to your .env file.');
+    }
+    if (err.message?.includes('401') || err.message?.includes('403')) {
+      throw new Error('Invalid or expired API key. Check your VITE_GEMINI_API_KEY in .env.');
+    }
+    if (err.message?.includes('429')) {
+      throw new Error('Rate limited by Gemini API. Please try again in a moment.');
+    }
+    throw new Error(err.message || 'Failed to get response from Gemini API');
   }
-
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || 'לא התקבלה תשובה מהמודל.';
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -202,17 +222,17 @@ export default function AIAssistant() {
     setLoading(true);
 
     try {
-      const reply = await callOpenAI(
+      const reply = await callGemini(
         newMessages.map(m => ({ role: m.role, content: m.content })),
         systemPrompt
       );
       setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
     } catch (err) {
-      console.error('AI call failed:', err);
+      console.error('Gemini call failed:', err);
       setError(err.message);
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `⚠️ אירעה שגיאה בחיבור למודל ה-AI.\n\n\`\`\`\n${err.message}\n\`\`\`\n\nאנא בדוק את הגדרות ה-API ונסה שוב.`,
+        content: `⚠️ אירעה שגיאה בחיבור ל-Gemini API.\n\n\`\`\`\n${err.message}\n\`\`\`\n\nאנא בדוק את הגדרות ה-API ונסה שוב.`,
         isError: true,
       }]);
     } finally {
@@ -461,7 +481,7 @@ export default function AIAssistant() {
           </button>
         </div>
         <p className="text-[10px] text-gray-400 text-center">
-          Enter לשליחה • Shift+Enter לשורה חדשה • המידע מבוסס על נתוני הקליניקה בזמן אמת
+          Enter לשליחה • Shift+Enter לשורה חדשה • מופעל ע"י Google Gemini 1.5 Flash
         </p>
       </div>
     </div>
