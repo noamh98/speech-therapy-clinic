@@ -1,4 +1,4 @@
-// src/pages/Calendar.jsx
+// src/pages/Calendar.jsx — Google Calendar-style redesign
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -13,33 +13,58 @@ import TreatmentDialog from '../components/shared/TreatmentDialog';
 import { formatDate } from '../utils/formatters';
 import {
   ChevronRight, ChevronLeft, Plus, Download,
-  Calendar as CalIcon, Clock, Target, PlusCircle, Pencil
+  Calendar as CalIcon, Clock, Target, PlusCircle, Pencil,
+  ArrowRight, MoreHorizontal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const VIEWS = ['day', 'week', 'month'];
+// ─── Constants ────────────────────────────────────────────────────────────────
+const VIEWS = ['month', 'week', 'day'];
 const VIEW_LABELS = { day: 'יום', week: 'שבוע', month: 'חודש' };
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 7);
 const DAYS_HE = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
-const DAYS_SHORT_HE = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
+const DAYS_SHORT_HE = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
 const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
+// Appointment color palette (Google Calendar-style)
+const APPT_COLORS = [
+  { bg: 'bg-blue-500',   light: 'bg-blue-50',   text: 'text-blue-700',   border: 'border-blue-400' },
+  { bg: 'bg-teal-500',   light: 'bg-teal-50',   text: 'text-teal-700',   border: 'border-teal-400' },
+  { bg: 'bg-purple-500', light: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-400' },
+  { bg: 'bg-green-500',  light: 'bg-green-50',  text: 'text-green-700',  border: 'border-green-400' },
+  { bg: 'bg-orange-500', light: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-400' },
+  { bg: 'bg-pink-500',   light: 'bg-pink-50',   text: 'text-pink-700',   border: 'border-pink-400' },
+];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function toDateStr(d) { return d.toISOString().slice(0, 10); }
 
 function getHebrewDateParts(date) {
-  const formatter = new Intl.DateTimeFormat('he-u-ca-hebrew', { day: 'numeric', month: 'long' });
-  const parts = formatter.format(date).split(' ');
-  return { day: parts[0], month: parts[1] };
+  try {
+    const formatter = new Intl.DateTimeFormat('he-u-ca-hebrew', { day: 'numeric', month: 'long' });
+    const parts = formatter.format(date).split(' ');
+    return { day: parts[0], month: parts[1] };
+  } catch { return { day: '', month: '' }; }
 }
 
+// Deterministic color per patient ID
+function getPatientColor(patientId) {
+  if (!patientId) return APPT_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < patientId.length; i++) hash = patientId.charCodeAt(i) + ((hash << 5) - hash);
+  return APPT_COLORS[Math.abs(hash) % APPT_COLORS.length];
+}
+
+// ─── Main Calendar Page ───────────────────────────────────────────────────────
 export default function CalendarPage() {
   const { user } = useAuth();
-  const [view, setView] = useState(window.innerWidth < 768 ? 'month' : 'week');
+  // Default view is now MONTH (Google Calendar default)
+  const [view, setView] = useState('month');
   const [cursor, setCursor] = useState(new Date());
   const [appointments, setAppointments] = useState([]);
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [apptModal, setApptModal] = useState(null); 
+  const [apptModal, setApptModal] = useState(null);
   const [treatModal, setTreatModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const dateInputRef = useRef(null);
@@ -69,6 +94,7 @@ export default function CalendarPage() {
     setCursor(d);
   };
 
+  // Click on a day in Month/Week view → drill down to Day view
   const handleDaySelect = (date) => {
     setCursor(date);
     setView('day');
@@ -77,7 +103,9 @@ export default function CalendarPage() {
   const getWeekDates = (d) => {
     const day = d.getDay();
     const sunday = new Date(d); sunday.setDate(d.getDate() - day);
-    return Array.from({ length: 7 }, (_, i) => { const x = new Date(sunday); x.setDate(sunday.getDate() + i); return x; });
+    return Array.from({ length: 7 }, (_, i) => {
+      const x = new Date(sunday); x.setDate(sunday.getDate() + i); return x;
+    });
   };
 
   const getMonthDates = (d) => {
@@ -85,19 +113,20 @@ export default function CalendarPage() {
     const startDay = first.getDay();
     const days = [];
     for (let i = 0; i < startDay; i++) {
-        const x = new Date(first); x.setDate(x.getDate() - (startDay - i)); days.push(x);
+      const x = new Date(first); x.setDate(x.getDate() - (startDay - i)); days.push(x);
     }
     const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
     for (let i = 1; i <= last.getDate(); i++) days.push(new Date(d.getFullYear(), d.getMonth(), i));
-    while(days.length < 42) {
-        const x = new Date(days[days.length-1]); x.setDate(x.getDate() + 1); days.push(x);
+    while (days.length < 42) {
+      const x = new Date(days[days.length - 1]); x.setDate(x.getDate() + 1); days.push(x);
     }
     return days;
   };
 
-  const getAppointmentsForDate = (dateStr) => {
-    return appointments.filter(a => a.date === dateStr).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
-  };
+  const getAppointmentsForDate = (dateStr) =>
+    appointments
+      .filter(a => a.date === dateStr)
+      .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
 
   const handleExport = () => {
     const content = exportToICS(appointments, patients);
@@ -110,6 +139,7 @@ export default function CalendarPage() {
     loadAll();
   };
 
+  // Header title changes per view
   const title = view === 'day'
     ? `${DAYS_HE[cursor.getDay()]}, ${formatDate(toDateStr(cursor))}`
     : view === 'week'
@@ -117,185 +147,274 @@ export default function CalendarPage() {
       : `${MONTHS_HE[cursor.getMonth()]} ${cursor.getFullYear()}`;
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50 p-2 md:p-6 pb-20">
-      <div className="flex items-center justify-between mb-6 px-2 max-w-7xl mx-auto w-full">
+    <div className="flex flex-col h-full bg-white" dir="rtl">
+      {/* ── Top Toolbar (Google Calendar style) ── */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0 gap-2 flex-wrap">
+        {/* Left cluster: Logo + Nav */}
         <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-teal-500 rounded-2xl text-white shadow-lg shadow-teal-100">
-                <CalIcon className="w-5 h-5" />
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+              <CalIcon className="w-4 h-4 text-white" />
             </div>
-            <div>
-                <h1 className="text-xl md:text-2xl font-black text-gray-800 leading-none">יומן טיפולים</h1>
-                <p className="text-[10px] text-gray-400 font-bold mt-1 uppercase tracking-widest">Workspace</p>
-            </div>
-        </div>
-        <div className="flex gap-2">
-            <button onClick={handleExport} className="hidden md:flex items-center gap-2 p-3 text-gray-500 hover:bg-white rounded-xl border border-transparent hover:border-gray-200 transition-all">
-                <Download className="w-5 h-5"/>
-                <span className="text-xs font-bold">ייצוא</span>
-            </button>
-            <button 
-                onClick={() => setApptModal({ date: toDateStr(cursor) })}
-                className="bg-teal-500 text-white px-4 md:px-6 h-12 rounded-2xl shadow-lg shadow-teal-200 flex items-center gap-2 active:scale-95 transition-all"
-            >
-                <Plus className="w-6 h-6" />
-                <span className="hidden md:inline font-bold">תור חדש</span>
-            </button>
-        </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto w-full space-y-4 flex-1 flex flex-col">
-        <div className="bg-white rounded-[2rem] p-4 shadow-sm border border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center justify-between md:justify-start md:gap-8 flex-1">
-              <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-50 rounded-full transition-colors text-gray-400 hover:text-teal-500"><ChevronRight className="w-6 h-6" /></button>
-              
-              <div className="text-center relative">
-                  <button 
-                    onClick={() => dateInputRef.current?.showPicker()} 
-                    className="group flex flex-col items-center min-w-[160px]"
-                  >
-                      <div className="text-lg md:text-xl font-black text-gray-800 leading-tight group-hover:text-teal-600 transition-colors flex items-center gap-2">
-                          {title}
-                          <CalIcon className="w-4 h-4 text-gray-300 group-hover:text-teal-400" />
-                      </div>
-                      <div className="text-[11px] font-bold text-teal-600 uppercase tracking-widest mt-0.5">
-                          {getHebrewDateParts(cursor).day} {getHebrewDateParts(cursor).month}
-                      </div>
-                      <input 
-                        ref={dateInputRef}
-                        type="date" 
-                        className="absolute inset-0 opacity-0 pointer-events-none" 
-                        onChange={(e) => e.target.value && setCursor(new Date(e.target.value))}
-                      />
-                  </button>
-              </div>
-
-              <button onClick={() => navigate(1)} className="p-2 hover:bg-gray-50 rounded-full transition-colors text-gray-400 hover:text-teal-500"><ChevronLeft className="w-6 h-6" /></button>
+            <span className="text-lg font-semibold text-gray-800 hidden sm:block">יומן</span>
           </div>
-          
-          <div className="flex items-center gap-2 bg-gray-100/60 p-1.5 rounded-2xl md:min-w-[350px]">
-            {VIEWS.map(v => (
+
+          {/* Today button */}
+          <button
+            onClick={() => { setCursor(new Date()); }}
+            className="px-4 py-1.5 text-sm font-medium border border-gray-300 rounded-full hover:bg-gray-50 transition-colors text-gray-700"
+          >
+            היום
+          </button>
+
+          {/* Prev / Next */}
+          <div className="flex items-center">
+            <button
+              onClick={() => navigate(-1)}
+              className="p-1.5 rounded-full hover:bg-gray-100 transition-colors text-gray-600"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => navigate(1)}
+              className="p-1.5 rounded-full hover:bg-gray-100 transition-colors text-gray-600"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Current period title */}
+          <button
+            onClick={() => dateInputRef.current?.showPicker()}
+            className="relative text-xl font-semibold text-gray-800 hover:text-blue-600 transition-colors"
+          >
+            {title}
+            <input
+              ref={dateInputRef}
+              type="date"
+              className="absolute inset-0 opacity-0 pointer-events-none"
+              onChange={(e) => e.target.value && setCursor(new Date(e.target.value + 'T12:00:00'))}
+            />
+          </button>
+        </div>
+
+        {/* Right cluster: View switcher + actions */}
+        <div className="flex items-center gap-2">
+          {/* View switcher */}
+          <div className="flex border border-gray-300 rounded-full overflow-hidden text-sm">
+            {VIEWS.map((v, idx) => (
               <button
                 key={v}
                 onClick={() => setView(v)}
-                className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${view === v ? 'bg-white shadow-sm text-teal-600' : 'text-gray-400'}`}
+                className={`px-3 py-1.5 font-medium transition-colors ${
+                  view === v
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-600 hover:bg-gray-100'
+                } ${idx === 0 ? '' : 'border-r border-gray-300'}`}
               >
                 {VIEW_LABELS[v]}
               </button>
             ))}
-            <button 
-              onClick={() => setCursor(new Date())} 
-              className="p-2 text-teal-600 hover:bg-white rounded-xl transition-all shadow-sm bg-white/50"
-            >
-              <Target className="w-4 h-4" />
-            </button>
           </div>
-        </div>
 
-        <div className="flex-1 relative min-h-[600px]">
-          <AnimatePresence mode="wait">
-            {loading ? (
-              <div className="flex justify-center p-20"><Spinner size="lg" /></div>
-            ) : (
-              <motion.div 
-                key={view + cursor.toISOString()}
-                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-                className="h-full"
-              >
-                {view === 'day' && (
-                  <DayView 
-                      date={cursor} appts={getAppointmentsForDate(toDateStr(cursor))} patientMap={patientMap}
-                      onNew={(time) => setApptModal({ date: toDateStr(cursor), time })}
-                      onEdit={(a) => setApptModal({ date: a.date, appt: a })}
-                      onTreat={(a) => setTreatModal(a)} onDelete={(a) => setDeleteTarget(a)}
-                  />
-                )}
-                {view === 'week' && (
-                  <WeekView 
-                      dates={getWeekDates(cursor)} getAppts={getAppointmentsForDate} patientMap={patientMap}
-                      onNew={(date) => setApptModal({ date })} onEdit={(a) => setApptModal({ date: a.date, appt: a })}
-                  />
-                )}
-                {view === 'month' && (
-                  <MonthView 
-                      dates={getMonthDates(cursor)} currentMonth={cursor.getMonth()} getAppts={getAppointmentsForDate} patientMap={patientMap}
-                      onSelectDay={handleDaySelect}
-                  />
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {/* Export */}
+          <button
+            onClick={handleExport}
+            className="hidden md:flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-full hover:bg-gray-50 transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            ייצוא
+          </button>
+
+          {/* New appointment */}
+          <button
+            onClick={() => setApptModal({ date: toDateStr(cursor) })}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-full hover:bg-blue-700 transition-colors shadow-sm"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">תור חדש</span>
+          </button>
         </div>
       </div>
 
+      {/* ── Calendar Body ── */}
+      <div className="flex-1 overflow-hidden relative">
+        <AnimatePresence mode="wait">
+          {loading ? (
+            <div className="flex justify-center items-center h-full">
+              <Spinner size="lg" />
+            </div>
+          ) : (
+            <motion.div
+              key={view + cursor.toISOString().slice(0, 7)}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="h-full"
+            >
+              {view === 'month' && (
+                <MonthView
+                  dates={getMonthDates(cursor)}
+                  currentMonth={cursor.getMonth()}
+                  getAppts={getAppointmentsForDate}
+                  patientMap={patientMap}
+                  onSelectDay={handleDaySelect}
+                  onNewAppt={(date) => setApptModal({ date: toDateStr(date) })}
+                />
+              )}
+              {view === 'week' && (
+                <WeekView
+                  dates={getWeekDates(cursor)}
+                  getAppts={getAppointmentsForDate}
+                  patientMap={patientMap}
+                  onSelectDay={handleDaySelect}
+                  onNew={(date) => setApptModal({ date })}
+                  onEdit={(a) => setApptModal({ date: a.date, appt: a })}
+                />
+              )}
+              {view === 'day' && (
+                <DayView
+                  date={cursor}
+                  appts={getAppointmentsForDate(toDateStr(cursor))}
+                  patientMap={patientMap}
+                  onNew={(time) => setApptModal({ date: toDateStr(cursor), time })}
+                  onEdit={(a) => setApptModal({ date: a.date, appt: a })}
+                  onTreat={(a) => setTreatModal(a)}
+                  onDelete={(a) => setDeleteTarget(a)}
+                  onBack={() => setView('month')}
+                />
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* ── Modals ── */}
       {apptModal && (
         <AppointmentModal
-          open={true} initialDate={apptModal.date} initialTime={apptModal.time}
-          appointment={apptModal.appt} patients={patients} therapistEmail={user?.email}
-          onClose={() => setApptModal(null)} onSaved={() => { setApptModal(null); loadAll(); }}
+          open={true}
+          initialDate={apptModal.date}
+          initialTime={apptModal.time}
+          appointment={apptModal.appt}
+          patients={patients}
+          therapistEmail={user?.email}
+          onClose={() => setApptModal(null)}
+          onSaved={() => { setApptModal(null); loadAll(); }}
         />
       )}
-      
+
       {treatModal && (
         <TreatmentDialog
-          open={!!treatModal} 
+          open={!!treatModal}
           appointment={treatModal}
           appointmentId={treatModal.id}
           treatmentId={treatModal.treatment_id}
           treatment={treatModal.treatment_id ? { id: treatModal.treatment_id } : null}
           patient={patientMap[treatModal.patient_id]}
-          onClose={() => setTreatModal(null)} 
+          onClose={() => setTreatModal(null)}
           onSaved={() => { setTreatModal(null); loadAll(); }}
         />
       )}
-      
+
       <ConfirmDialog
-        open={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteAppt}
-        title="מחיקת תור" message="האם למחוק את התור?" confirmLabel="מחק" danger
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteAppt}
+        title="מחיקת תור"
+        message="האם למחוק את התור?"
+        confirmLabel="מחק"
+        danger
       />
     </div>
   );
 }
 
-/* ── Day View ──────────────────────────────────────────── */
-function DayView({ date, appts, patientMap, onNew, onEdit, onTreat }) {
-  const dateStr = toDateStr(date);
-  const holiday = getHolidayName(dateStr);
+// ─── Month View (Google Calendar style) ──────────────────────────────────────
+function MonthView({ dates, currentMonth, getAppts, patientMap, onSelectDay, onNewAppt }) {
+  const today = toDateStr(new Date());
+
   return (
-    <div className="bg-white rounded-[2.5rem] p-6 h-full shadow-sm border border-gray-100 overflow-y-auto max-h-[80vh]">
-      {holiday && <div className="mb-6 text-center text-xs font-bold text-orange-600 bg-orange-50 rounded-2xl py-3 uppercase tracking-wide">🎉 {holiday}</div>}
-      <div className="space-y-4">
-        {HOURS.map(h => {
-          const time = `${String(h).padStart(2, '0')}:00`;
-          const slotAppts = appts.filter(a => (a.start_time || '').startsWith(String(h).padStart(2, '0')));
+    <div className="flex flex-col h-full">
+      {/* Day-of-week header */}
+      <div className="grid grid-cols-7 border-b border-gray-200 bg-white flex-shrink-0">
+        {DAYS_SHORT_HE.map(d => (
+          <div key={d} className="py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wide">
+            {d}
+          </div>
+        ))}
+      </div>
+
+      {/* Day cells grid */}
+      <div className="grid grid-cols-7 flex-1" style={{ gridTemplateRows: 'repeat(6, 1fr)' }}>
+        {dates.map((d, i) => {
+          const ds = toDateStr(d);
+          const isCurrent = d.getMonth() === currentMonth;
+          const isToday = ds === today;
+          const appts = getAppts(ds);
+          const holiday = getHolidayName(ds);
+
           return (
-            <div key={h} className="flex gap-6 min-h-[80px] border-b border-gray-50 last:border-0 group">
-              <span className="text-xs font-black text-gray-300 w-12 pt-1 transition-colors group-hover:text-teal-400" dir="ltr">{time}</span>
-              <div className="flex-1 pb-4" onClick={() => onNew(time)}>
-                {slotAppts.length > 0 ? slotAppts.map(a => (
-                  <div key={a.id} className="mb-2 p-4 bg-teal-50/50 rounded-3xl border-r-4 border-teal-500 flex justify-between items-center group/item shadow-sm hover:shadow-md transition-all cursor-pointer" onClick={(e) => { e.stopPropagation(); onEdit(a); }}>
-                    <div>
-                        <div className="font-black text-teal-900 text-base">{patientMap[a.patient_id]?.full_name || '—'}</div>
-                        <div className="text-xs text-teal-600 font-bold mt-1 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> {a.start_time} ({a.duration_minutes || 45} דק')</div>
+            <div
+              key={i}
+              className={`border-b border-r border-gray-100 flex flex-col min-h-0 cursor-pointer group transition-colors
+                ${isCurrent ? 'bg-white hover:bg-blue-50/30' : 'bg-gray-50/50'}
+                ${isToday ? 'bg-blue-50/40' : ''}
+              `}
+              onClick={() => isCurrent && onSelectDay(d)}
+            >
+              {/* Day number */}
+              <div className="flex items-center justify-between px-2 pt-1.5 pb-1 flex-shrink-0">
+                <span
+                  className={`text-sm font-medium w-7 h-7 flex items-center justify-center rounded-full transition-colors
+                    ${isToday
+                      ? 'bg-blue-600 text-white font-bold'
+                      : isCurrent
+                        ? 'text-gray-800 group-hover:bg-blue-100 group-hover:text-blue-700'
+                        : 'text-gray-300'
+                    }`}
+                >
+                  {d.getDate()}
+                </span>
+                {/* Hebrew date */}
+                <span className={`text-[10px] ${isCurrent ? 'text-gray-400' : 'text-gray-200'}`}>
+                  {getHebrewDateParts(d).day}
+                </span>
+              </div>
+
+              {/* Holiday label */}
+              {holiday && isCurrent && (
+                <div className="mx-1 mb-0.5 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[10px] font-medium rounded truncate flex-shrink-0">
+                  {holiday}
+                </div>
+              )}
+
+              {/* Appointment pills */}
+              <div className="flex-1 px-1 pb-1 space-y-0.5 overflow-hidden min-h-0">
+                {appts.slice(0, 3).map((a) => {
+                  const color = getPatientColor(a.patient_id);
+                  const name = patientMap[a.patient_id]?.full_name || '—';
+                  return (
+                    <div
+                      key={a.id}
+                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium truncate cursor-pointer
+                        ${a.status === 'completed'
+                          ? 'bg-gray-100 text-gray-500 line-through'
+                          : `${color.light} ${color.text}`
+                        }`}
+                      onClick={(e) => { e.stopPropagation(); onSelectDay(d); }}
+                      title={`${a.start_time} — ${name}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.status === 'completed' ? 'bg-gray-400' : color.bg}`} />
+                      <span className="truncate">{a.start_time} {name}</span>
                     </div>
-                    <div className="flex gap-2">
-                        <button 
-                            onClick={(e) => { e.stopPropagation(); onTreat(a); }} 
-                            className={`p-3 rounded-2xl shadow-sm border transition-all flex items-center gap-2 ${
-                              a.treatment_id 
-                              ? 'bg-amber-50 text-amber-600 border-amber-100 hover:bg-amber-600 hover:text-white' 
-                              : 'bg-white text-teal-600 border-teal-100 hover:bg-teal-600 hover:text-white'
-                            }`}
-                            title={a.treatment_id ? "ערוך תיעוד" : "התחל טיפול"}
-                        >
-                            {a.treatment_id ? <Pencil className="w-5 h-5"/> : <PlusCircle className="w-5 h-5"/>}
-                            <span className="hidden md:inline text-xs font-bold">
-                              {a.treatment_id ? 'ערוך תיעוד' : 'התחל טיפול'}
-                            </span>
-                        </button>
-                    </div>
+                  );
+                })}
+                {appts.length > 3 && (
+                  <div className="text-[11px] text-blue-600 font-medium px-1.5 cursor-pointer hover:underline"
+                    onClick={(e) => { e.stopPropagation(); onSelectDay(d); }}>
+                    +{appts.length - 3} נוספים
                   </div>
-                )) : (
-                  <div className="h-full w-full rounded-2xl border-2 border-dashed border-transparent hover:border-gray-100 transition-colors cursor-pointer" />
                 )}
               </div>
             </div>
@@ -306,90 +425,245 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat }) {
   );
 }
 
-/* ── Week View ─────────────────────────────────────────── */
-function WeekView({ dates, getAppts, patientMap, onNew, onEdit }) {
+// ─── Week View ────────────────────────────────────────────────────────────────
+function WeekView({ dates, getAppts, patientMap, onSelectDay, onNew, onEdit }) {
   const today = toDateStr(new Date());
+
   return (
-    <div className="bg-white rounded-[2.5rem] overflow-hidden h-full shadow-sm border border-gray-100 flex flex-col">
-      <div className="grid grid-cols-7 gap-px bg-gray-100 flex-1">
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Day headers */}
+      <div className="grid grid-cols-7 border-b border-gray-200 bg-white flex-shrink-0">
         {dates.map(d => {
           const ds = toDateStr(d);
           const isToday = ds === today;
-          const appts = getAppts(ds);
           return (
-            <div key={ds} className={`bg-white min-h-[500px] flex flex-col ${isToday ? 'bg-teal-50/10' : ''}`}>
-              <div className="p-4 text-center border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors" onClick={() => onNew(ds)}>
-                <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{DAYS_SHORT_HE[d.getDay()]}</p>
-                <p className={`text-lg font-black mt-1 ${isToday ? 'text-teal-600' : 'text-gray-800'}`}>{d.getDate()}</p>
-              </div>
-              <div className="flex-1 p-2 space-y-2 overflow-y-auto">
-                {appts.map(a => (
-                  <div key={a.id} className="p-3 bg-teal-50/40 rounded-2xl border border-teal-100/50 text-[11px] cursor-pointer hover:shadow-sm hover:bg-teal-50 transition-all" onClick={() => onEdit(a)}>
-                    <div className="font-black text-teal-900 truncate">{patientMap[a.patient_id]?.full_name || '—'}</div>
-                    <div className="text-teal-500 font-bold mt-1">{a.start_time}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/* ── Month View ─────────────────── */
-function MonthView({ dates, currentMonth, getAppts, onSelectDay }) {
-  const today = toDateStr(new Date());
-  return (
-    <div className="bg-white rounded-[2.5rem] p-6 h-full shadow-sm border border-gray-100 flex flex-col">
-      <div className="grid grid-cols-7 mb-6">
-        {DAYS_SHORT_HE.map(d => <div key={d} className="text-center text-[11px] font-black text-gray-300 uppercase tracking-widest">{d}</div>)}
-      </div>
-      <div className="grid grid-cols-7 gap-3 flex-1">
-        {dates.map((d, i) => {
-          const ds = toDateStr(d);
-          const isCurrent = d.getMonth() === currentMonth;
-          const isToday = ds === today;
-          const appts = getAppts(ds);
-          const heb = getHebrewDateParts(d);
-          
-          return (
-            <div 
-                key={i} 
-                className={`
-                    relative min-h-[85px] md:min-h-[100px] flex flex-col items-center justify-start pt-3 rounded-[2rem] transition-all active:scale-95 cursor-pointer
-                    ${isCurrent ? 'bg-white' : 'opacity-20 pointer-events-none'}
-                    ${isToday ? 'bg-teal-50 ring-2 ring-teal-500 ring-inset shadow-md' : 'bg-gray-50/40'}
-                    hover:bg-teal-50/50 hover:shadow-sm
-                `} 
-                onClick={() => onSelectDay(d)}
+            <div
+              key={ds}
+              className="py-2 text-center cursor-pointer hover:bg-gray-50 transition-colors"
+              onClick={() => onSelectDay(d)}
             >
-              <span className={`text-base font-black ${isToday ? 'text-teal-700' : 'text-gray-700'}`}>{d.getDate()}</span>
-              <span className="text-[10px] font-bold text-gray-300 mt-0.5">{heb.day}</span>
-              
-              <div className="flex gap-1 mt-auto mb-4">
-                {appts.slice(0, 3).map((a, idx) => (
-                    <div key={idx} className={`w-1.5 h-1.5 rounded-full ${a.status === 'completed' ? 'bg-teal-500' : 'bg-teal-300'}`} />
-                ))}
-                {appts.length > 3 && <div className="w-1.5 h-1.5 rounded-full bg-gray-200" />}
-              </div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">
+                {DAYS_SHORT_HE[d.getDay()]}
+              </p>
+              <p className={`text-2xl font-medium mt-0.5 w-10 h-10 mx-auto flex items-center justify-center rounded-full transition-colors
+                ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}>
+                {d.getDate()}
+              </p>
             </div>
           );
         })}
+      </div>
+
+      {/* Time grid */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="grid grid-cols-7 divide-x divide-gray-100 min-h-full">
+          {dates.map(d => {
+            const ds = toDateStr(d);
+            const isToday = ds === today;
+            const appts = getAppts(ds);
+            return (
+              <div
+                key={ds}
+                className={`flex flex-col min-h-[600px] ${isToday ? 'bg-blue-50/20' : 'bg-white'}`}
+              >
+                <div
+                  className="flex-1 p-1 space-y-1 cursor-pointer"
+                  onClick={() => onNew(ds)}
+                >
+                  {appts.map(a => {
+                    const color = getPatientColor(a.patient_id);
+                    const name = patientMap[a.patient_id]?.full_name || '—';
+                    return (
+                      <div
+                        key={a.id}
+                        className={`p-2 rounded-lg text-xs cursor-pointer hover:opacity-90 transition-opacity border-r-2
+                          ${a.status === 'completed'
+                            ? 'bg-gray-100 text-gray-500 border-gray-300'
+                            : `${color.light} ${color.text} ${color.border}`
+                          }`}
+                        onClick={(e) => { e.stopPropagation(); onEdit(a); }}
+                      >
+                        <div className="font-semibold truncate">{name}</div>
+                        <div className="opacity-75 mt-0.5 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {a.start_time}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
 
-/* ── Appointment Modal ── */
+// ─── Day View ─────────────────────────────────────────────────────────────────
+function DayView({ date, appts, patientMap, onNew, onEdit, onTreat, onDelete, onBack }) {
+  const dateStr = toDateStr(date);
+  const holiday = getHolidayName(dateStr);
+  const isToday = dateStr === toDateStr(new Date());
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Day header with back button */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 transition-colors font-medium"
+        >
+          <ArrowRight className="w-4 h-4" />
+          חזרה לחודש
+        </button>
+        <div className="h-4 w-px bg-gray-200" />
+        <div className="flex items-center gap-2">
+          <span
+            className={`text-2xl font-bold w-10 h-10 flex items-center justify-center rounded-full
+              ${isToday ? 'bg-blue-600 text-white' : 'text-gray-800'}`}
+          >
+            {date.getDate()}
+          </span>
+          <div>
+            <p className="text-base font-semibold text-gray-800">
+              {DAYS_HE[date.getDay()]}, {MONTHS_HE[date.getMonth()]} {date.getFullYear()}
+            </p>
+            <p className="text-xs text-gray-400">
+              {getHebrewDateParts(date).day} {getHebrewDateParts(date).month}
+            </p>
+          </div>
+        </div>
+        {holiday && (
+          <span className="mr-auto px-3 py-1 bg-orange-100 text-orange-700 text-xs font-medium rounded-full">
+            🎉 {holiday}
+          </span>
+        )}
+        <button
+          onClick={() => onNew('09:00')}
+          className="mr-auto flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-full hover:bg-blue-700 transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          תור חדש
+        </button>
+      </div>
+
+      {/* Time slots */}
+      <div className="flex-1 overflow-y-auto">
+        {appts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
+            <CalIcon className="w-12 h-12 text-gray-200" />
+            <p className="text-sm font-medium">אין תורים ביום זה</p>
+            <button
+              onClick={() => onNew('09:00')}
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-full hover:bg-blue-700 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              הוסף תור
+            </button>
+          </div>
+        ) : (
+          <div className="max-w-2xl mx-auto px-4 py-4 space-y-3">
+            {HOURS.map(h => {
+              const time = `${String(h).padStart(2, '0')}:00`;
+              const slotAppts = appts.filter(a => (a.start_time || '').startsWith(String(h).padStart(2, '0')));
+              if (slotAppts.length === 0) return null;
+
+              return (
+                <div key={h} className="flex gap-4">
+                  <div className="w-14 text-right pt-1 flex-shrink-0">
+                    <span className="text-xs font-medium text-gray-400" dir="ltr">{time}</span>
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    {slotAppts.map(a => {
+                      const color = getPatientColor(a.patient_id);
+                      const name = patientMap[a.patient_id]?.full_name || '—';
+                      return (
+                        <motion.div
+                          key={a.id}
+                          initial={{ opacity: 0, x: 8 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          className={`flex items-center justify-between p-4 rounded-xl border-r-4 cursor-pointer
+                            hover:shadow-md transition-all group
+                            ${a.status === 'completed'
+                              ? 'bg-gray-50 border-gray-300'
+                              : `${color.light} ${color.border}`
+                            }`}
+                          onClick={() => onEdit(a)}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className={`font-semibold text-base truncate ${a.status === 'completed' ? 'text-gray-500 line-through' : color.text}`}>
+                              {name}
+                            </div>
+                            <div className="flex items-center gap-3 mt-1">
+                              <span className="flex items-center gap-1 text-xs text-gray-500">
+                                <Clock className="w-3.5 h-3.5" />
+                                {a.start_time} ({a.duration_minutes || 45} דק')
+                              </span>
+                              {a.status === 'completed' && (
+                                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                                  הושלם
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onTreat(a); }}
+                              className={`p-2 rounded-lg transition-colors text-sm font-medium flex items-center gap-1.5
+                                ${a.treatment_id
+                                  ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                                }`}
+                              title={a.treatment_id ? 'ערוך תיעוד' : 'תעד טיפול'}
+                            >
+                              {a.treatment_id ? <Pencil className="w-4 h-4" /> : <PlusCircle className="w-4 h-4" />}
+                              <span className="hidden md:inline text-xs">
+                                {a.treatment_id ? 'ערוך' : 'תעד'}
+                              </span>
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onDelete(a); }}
+                              className="p-2 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 transition-colors"
+                              title="מחק תור"
+                            >
+                              <MoreHorizontal className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Empty hours prompt */}
+            <div
+              className="flex gap-4 cursor-pointer group"
+              onClick={() => onNew('10:00')}
+            >
+              <div className="w-14" />
+              <div className="flex-1 h-12 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center text-gray-400 text-sm group-hover:border-blue-300 group-hover:text-blue-500 transition-colors">
+                <Plus className="w-4 h-4 ml-1" /> הוסף תור
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Appointment Modal ────────────────────────────────────────────────────────
 function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, appointment, patients, therapistEmail }) {
   const isEdit = !!appointment;
   const [form, setForm] = useState({
     patient_id: '', date: initialDate || '', start_time: initialTime || '09:00',
     duration_minutes: 45, notes: '', status: 'scheduled',
   });
-  
   const [isCustomDuration, setIsCustomDuration] = useState(false);
   const [recurring, setRecurring] = useState(false);
   const [recurCount, setRecurCount] = useState(4);
@@ -400,21 +674,17 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
   useEffect(() => {
     if (appointment) {
       setForm({ ...appointment });
-      if (![30, 45, 60, 90].includes(Number(appointment.duration_minutes))) {
-        setIsCustomDuration(true);
-      }
+      if (![30, 45, 60, 90].includes(Number(appointment.duration_minutes))) setIsCustomDuration(true);
+    } else {
+      setForm(f => ({ ...f, date: initialDate || '', start_time: initialTime || '09:00' }));
     }
-    else setForm(f => ({ ...f, date: initialDate || '', start_time: initialTime || '09:00' }));
+    setOverlapWarn([]);
   }, [open, appointment, initialDate, initialTime]);
 
   const handleDurationChange = (e) => {
     const val = e.target.value;
-    if (val === 'custom') {
-      setIsCustomDuration(true);
-    } else {
-      setIsCustomDuration(false);
-      setForm({ ...form, duration_minutes: Number(val) });
-    }
+    if (val === 'custom') { setIsCustomDuration(true); }
+    else { setIsCustomDuration(false); setForm({ ...form, duration_minutes: Number(val) }); }
   };
 
   const checkAndSave = async (e) => {
@@ -436,86 +706,136 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
 
   return (
     <Modal open={open} onClose={onClose} title={isEdit ? 'עריכת תור' : 'קביעת תור חדש'}>
-      <form onSubmit={checkAndSave} className="space-y-5">
+      <form onSubmit={checkAndSave} className="space-y-4">
         {overlapWarn.length > 0 && (
-          <div className="bg-orange-50 p-3 rounded-2xl text-[11px] text-orange-800 font-bold border border-orange-100">
-            ⚠️ שים לב: קיימת חפיפה עם תור אחר. לחץ שוב לאישור.
+          <div className="bg-orange-50 p-3 rounded-lg text-sm text-orange-800 border border-orange-200">
+            ⚠️ קיימת חפיפה עם תור אחר. לחץ שמירה שוב לאישור.
           </div>
         )}
-        <div className="space-y-1">
-          <label className="text-[10px] font-black text-gray-400 mr-2 uppercase">מטופל/ת</label>
-          <select className="w-full bg-gray-50 border-none rounded-2xl h-14 px-4 font-bold text-gray-800 focus:ring-2 focus:ring-teal-500 transition-all" value={form.patient_id} onChange={e => setForm({...form, patient_id: e.target.value})} required>
+
+        <div>
+          <label className="label">מטופל/ת *</label>
+          <select
+            className="input"
+            value={form.patient_id}
+            onChange={e => setForm({ ...form, patient_id: e.target.value })}
+            required
+          >
             <option value="">בחר מטופל...</option>
             {patients.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
           </select>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-gray-400 mr-2 uppercase">תאריך</label>
-            <input type="date" className="w-full bg-gray-50 border-none rounded-2xl h-14 px-4 font-bold text-gray-800" value={form.date} onChange={e => setForm({...form, date: e.target.value})} required />
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">תאריך *</label>
+            <input
+              type="date" className="input"
+              value={form.date}
+              onChange={e => setForm({ ...form, date: e.target.value })}
+              required
+            />
           </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-gray-400 mr-2 uppercase">שעה</label>
-            <input type="time" className="w-full bg-gray-50 border-none rounded-2xl h-14 px-4 font-bold text-gray-800" value={form.start_time} onChange={e => setForm({...form, start_time: e.target.value})} required />
+          <div>
+            <label className="label">שעה *</label>
+            <input
+              type="time" className="input"
+              value={form.start_time}
+              onChange={e => setForm({ ...form, start_time: e.target.value })}
+              required
+            />
           </div>
         </div>
-        
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1">
-              <label className="text-[10px] font-black text-gray-400 mr-2 uppercase">משך (דקות)</label>
-              <div className="space-y-2">
-                <select 
-                    className="w-full bg-gray-50 border-none rounded-2xl h-14 px-4 font-bold text-gray-800" 
-                    value={isCustomDuration ? 'custom' : form.duration_minutes} 
-                    onChange={handleDurationChange}
-                >
-                    {[30, 45, 60, 90].map(d => <option key={d} value={d}>{d} דק'</option>)}
-                    <option value="custom">אחר...</option>
-                </select>
-                {isCustomDuration && (
-                    <motion.input 
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        type="number" 
-                        placeholder="כמה דקות?" 
-                        className="w-full bg-teal-50 border border-teal-100 rounded-xl h-10 px-4 font-bold text-teal-800 text-sm"
-                        value={form.duration_minutes}
-                        onChange={e => setForm({...form, duration_minutes: Number(e.target.value)})}
-                        required
-                    />
-                )}
-              </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">משך (דקות)</label>
+            <select
+              className="input"
+              value={isCustomDuration ? 'custom' : form.duration_minutes}
+              onChange={handleDurationChange}
+            >
+              <option value={30}>30 דקות</option>
+              <option value={45}>45 דקות</option>
+              <option value={60}>60 דקות</option>
+              <option value={90}>90 דקות</option>
+              <option value="custom">מותאם אישית</option>
+            </select>
+            {isCustomDuration && (
+              <input
+                type="number" className="input mt-2" placeholder="הכנס מספר דקות"
+                value={form.duration_minutes}
+                onChange={e => setForm({ ...form, duration_minutes: Number(e.target.value) })}
+                min={1}
+              />
+            )}
           </div>
-          {isEdit && (
-            <div className="space-y-1">
-               <label className="text-[10px] font-black text-gray-400 mr-2 uppercase">סטטוס</label>
-               <select className="w-full bg-gray-50 border-none rounded-2xl h-14 px-4 font-bold text-gray-800" value={form.status} onChange={e => setForm({...form, status: e.target.value})}>
-                 <option value="scheduled">מתוכנן</option>
-                 <option value="completed">הושלם</option>
-                 <option value="cancelled">בוטל</option>
-               </select>
-            </div>
-          )}
+          <div>
+            <label className="label">סטטוס</label>
+            <select
+              className="input"
+              value={form.status}
+              onChange={e => setForm({ ...form, status: e.target.value })}
+            >
+              <option value="scheduled">מתוכנן</option>
+              <option value="completed">הושלם</option>
+              <option value="cancelled">בוטל</option>
+              <option value="missed">לא הגיע</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label className="label">הערות</label>
+          <textarea
+            className="input resize-none"
+            rows={3}
+            placeholder="הערות לתור..."
+            value={form.notes || ''}
+            onChange={e => setForm({ ...form, notes: e.target.value })}
+          />
         </div>
 
         {!isEdit && (
-          <div className="p-4 bg-gray-50 rounded-[2rem] border border-gray-100">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" checked={recurring} onChange={e => setRecurring(e.target.checked)} className="w-5 h-5 rounded-lg text-teal-600 border-none bg-white shadow-sm" />
-              <span className="text-sm font-black text-gray-700">סדרת תורים קבועה</span>
+          <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={recurring}
+                onChange={e => setRecurring(e.target.checked)}
+                className="w-4 h-4 rounded text-blue-600"
+              />
+              <span className="text-sm font-medium text-gray-700">סדרת תורים קבועה</span>
             </label>
             {recurring && (
-              <div className="grid grid-cols-2 gap-3 mt-4 animate-in fade-in slide-in-from-top-2">
-                <input type="number" placeholder="כמות" className="h-12 bg-white rounded-xl border-none px-4 text-sm font-bold" value={recurCount} onChange={e => setRecurCount(e.target.value)} />
-                <input type="number" placeholder="כל X ימים" className="h-12 bg-white rounded-xl border-none px-4 text-sm font-bold" value={recurDays} onChange={e => setRecurDays(e.target.value)} />
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <label className="label">מספר תורים</label>
+                  <input
+                    type="number" className="input"
+                    value={recurCount}
+                    onChange={e => setRecurCount(e.target.value)}
+                    min={2} max={52}
+                  />
+                </div>
+                <div>
+                  <label className="label">כל כמה ימים</label>
+                  <input
+                    type="number" className="input"
+                    value={recurDays}
+                    onChange={e => setRecurDays(e.target.value)}
+                    min={1}
+                  />
+                </div>
               </div>
             )}
           </div>
         )}
+
         <div className="flex gap-3 pt-2">
-          <button type="button" onClick={onClose} className="flex-1 h-14 rounded-2xl font-black text-gray-400 bg-gray-100">ביטול</button>
-          <button type="submit" disabled={saving} className="flex-1 h-14 rounded-2xl font-black text-white bg-teal-500 shadow-lg shadow-teal-100">
-            {saving ? 'שומר...' : 'שמירה'}
+          <button type="button" onClick={onClose} className="btn-secondary flex-1">ביטול</button>
+          <button type="submit" disabled={saving} className="btn-primary flex-1">
+            {saving ? 'שומר...' : isEdit ? 'עדכן תור' : 'שמור תור'}
           </button>
         </div>
       </form>
