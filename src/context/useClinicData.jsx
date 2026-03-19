@@ -1,31 +1,18 @@
 /**
- * useClinicData — Global data hook for SpeechCare
+ * useClinicData — Global data hook for SpeechCare (Multi-tenant version)
  *
- * WHY THIS EXISTS:
- * Dashboard, Calendar, Reports, and Patients all independently call
- * getPatients(), getAppointments(), and getTreatments() on mount.
- * This causes 3–9 redundant Firestore reads every time the user
- * navigates between pages, and makes it impossible to share
- * already-loaded data without prop drilling.
- *
- * This hook provides a single source of truth via React Context.
- * Data is fetched once per session (or on explicit refresh).
- * Individual pages call useClinicData() and get data instantly
- * from the cache on subsequent renders.
- *
- * USAGE:
- *   // In App.jsx — wrap once:
- *   <ClinicDataProvider><AppRoutes /></ClinicDataProvider>
- *
- *   // In any page/component:
- *   const { patients, appointments, treatments, loading, refresh } = useClinicData();
+ * FIXES APPLIED:
+ * 1. Added useEffect that calls fetchAll() automatically when a user logs in.
+ *    Previously, data was never loaded on mount — every page got empty arrays
+ *    until something manually called refresh().
  */
 
-import { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { useAuth } from './AuthContext'; // adjust path if needed
+import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
+import { useAuth } from './AuthContext';
 import { getPatients } from '../services/patients';
 import { getAppointments } from '../services/appointments';
 import { getTreatments } from '../services/treatments';
+import { getPayments } from '../services/payments';
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 
@@ -39,26 +26,16 @@ export function ClinicDataProvider({ children }) {
   const [patients, setPatients] = useState([]);
   const [appointments, setAppointments] = useState([]);
   const [treatments, setTreatments] = useState([]);
+  // FIX: Added payments to global context so Dashboard and PatientProfile
+  // share the same data and update together after a payment is saved.
+  const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Track whether we've fetched at least once so pages don't show
-  // a full-screen spinner when data is already cached.
   const hasFetchedRef = useRef(false);
 
-  /**
-   * fetchAll — loads patients, appointments (bounded to ±3 months),
-   * and treatments in parallel.
-   *
-   * PERFORMANCE NOTE: getAppointments() previously fetched ALL
-   * appointments for the therapist with no date bounds. For a busy
-   * clinic with years of history, this can be thousands of documents.
-   * We now pass a rolling 3-month window. The Calendar page only ever
-   * shows one month at a time, so this covers the current view plus
-   * reasonable navigation.
-   */
   const fetchAll = useCallback(async () => {
-    if (!user?.email) return;
+    if (!user?.uid) return;
 
     setLoading(true);
     setError(null);
@@ -74,15 +51,20 @@ export function ClinicDataProvider({ children }) {
       const startStr = start.toISOString().slice(0, 10);
       const endStr   = end.toISOString().slice(0, 10);
 
-      const [p, a, t] = await Promise.all([
-        getPatients(user.email),
-        getAppointments(user.email, startStr, endStr),
-        getTreatments(user.email),
+      const [p, a, t, pay] = await Promise.all([
+        getPatients(),
+        getAppointments(startStr, endStr),
+        getTreatments(),
+        // FIX: Fetch payments in parallel with everything else.
+        // Dashboard revenue and PatientProfile payment history now read from
+        // this shared state instead of making their own redundant Firestore calls.
+        getPayments(),
       ]);
 
       setPatients(p);
       setAppointments(a);
       setTreatments(t);
+      setPayments(pay);
       hasFetchedRef.current = true;
     } catch (err) {
       console.error('useClinicData fetch error:', err);
@@ -90,14 +72,28 @@ export function ClinicDataProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [user?.email]);
+  }, [user?.uid]);
 
-  /**
-   * Derived helpers — computed once here, not in every component.
-   *
-   * patientMap: O(1) patient lookup by ID, used by Calendar, Dashboard, etc.
-   * todayAppointments: pre-filtered for the Dashboard widget.
-   */
+  // ─── FIX: Auto-fetch when user logs in ───────────────────────────────────────
+  // Previously this was never called automatically, so all pages started with
+  // empty arrays until something manually triggered refresh().
+  useEffect(() => {
+    if (user?.uid) {
+      fetchAll();
+    } else {
+      // Clear data on logout
+      setPatients([]);
+      setAppointments([]);
+      setTreatments([]);
+      setPayments([]);
+      hasFetchedRef.current = false;
+    }
+  }, [user?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Note: fetchAll is intentionally omitted from deps here to avoid re-fetch
+  // loops. It is stable (useCallback with user?.uid dep), but ESLint can't
+  // verify that. The effect should only fire on uid change, not on every render.
+
+  // ─── Derived helpers ──────────────────────────────────────────────────────────
   const today = new Date().toISOString().slice(0, 10);
 
   const patientMap = Object.fromEntries(patients.map(p => [p.id, p]));
@@ -108,17 +104,37 @@ export function ClinicDataProvider({ children }) {
 
   const activePatients = patients.filter(p => p.status === 'active' && !p.is_archived);
 
+  // FIX: Pre-compute monthly payment stats here so Dashboard reads from context,
+  // not from a separate getPaymentStats() Firestore call. This means after any
+  // payment is saved and refresh() is called, Dashboard stats update immediately.
+  const thisMonth = today.slice(0, 7); // YYYY-MM
+  const monthPayments = payments.filter(p => (p.payment_date || '').startsWith(thisMonth));
+  const paymentStats = {
+    total_payments: monthPayments.length,
+    total_amount: monthPayments.reduce((s, p) => s + (p.amount || 0), 0),
+    completed_amount: monthPayments
+      .filter(p => p.payment_status === 'completed')
+      .reduce((s, p) => s + (p.amount || 0), 0),
+    pending_amount: monthPayments
+      .filter(p => p.payment_status === 'pending')
+      .reduce((s, p) => s + (p.amount || 0), 0),
+  };
+
   return (
     <ClinicDataContext.Provider value={{
       // Raw data
       patients,
       appointments,
       treatments,
+      payments,
 
       // Derived / pre-computed
       patientMap,
       todayAppointments,
       activePatients,
+      // FIX: paymentStats computed from shared payments state — Dashboard reads
+      // this instead of making a separate getPaymentStats() Firestore call.
+      paymentStats,
 
       // State
       loading,
@@ -134,6 +150,7 @@ export function ClinicDataProvider({ children }) {
       setPatients,
       setAppointments,
       setTreatments,
+      setPayments,
     }}>
       {children}
     </ClinicDataContext.Provider>

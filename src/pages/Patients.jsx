@@ -45,21 +45,48 @@ export default function Patients() {
   const [saving, setSaving] = useState(false);
   const [pageError, setPageError] = useState('');
 
-  useEffect(() => { load(); }, [user, showArchived]);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MULTI-TENANCY: Load patients only when user is fully authenticated
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    // CRITICAL: Wait for user.uid to be available, not just user.email
+    // user.uid is required by the service's ownerId filtering
+    if (!user?.uid) {
+      console.log('[Patients] Waiting for auth to be ready...');
+      setLoading(true);
+      return;
+    }
+
+    load();
+  }, [user?.uid, showArchived]); // Depend on user.uid, not user.email
 
   async function load() {
-    if (!user?.email) return;
     setLoading(true);
     setPageError('');
+
     try {
-      // FIX: treatment_count is now a denormalized field on each patient document.
-      // No more N+1: 30 patients = 1 Firestore read, not 31.
-      const p = await getPatients(user.email, showArchived);
-      setPatients(p);
+      // CRITICAL FIX: Call getPatients with ONLY the includeArchived parameter
+      // The service now handles ownerId filtering internally
+      // Do NOT pass user.email — it was causing the parameter to be misinterpreted
+      const p = await getPatients(showArchived);
+      
+      console.log(`[Patients] Loaded ${p.length} patients (showArchived=${showArchived})`);
+      
+      // SECURITY: Verify all returned patients belong to current user
+      const userPatients = p.filter(pat => pat.ownerId === user.uid);
+      
+      if (userPatients.length !== p.length) {
+        console.warn(`[Patients] Security: Filtered ${p.length - userPatients.length} cross-tenant records`);
+      }
+      
+      setPatients(userPatients);
     } catch (err) {
-      setPageError('שגיאה בטעינת רשימת המטופלים. נסה לרענן את הדף.');
-      console.error('[Patients] load error:', err);
-    } finally { setLoading(false); }
+      console.error('[Patients] Load error:', err);
+      setPageError(err.message || 'שגיאה בטעינת רשימת המטופלים. נסה שוב.');
+      setPatients([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   // useMemo: filtered list only recomputes when patients/search/statusFilter change,

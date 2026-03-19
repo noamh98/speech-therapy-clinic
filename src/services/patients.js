@@ -1,4 +1,4 @@
-// src/services/patients.js
+// src/services/patients.js — Multi-tenant patient service using ownerId with robust error handling
 import {
   collection, doc, addDoc, updateDoc,
   getDocs, getDoc, query, where, serverTimestamp,
@@ -7,15 +7,6 @@ import {
 import { db, auth } from './firebase';
 
 const COLLECTION = 'patients';
-
-// ─── Firestore Index Required ──────────────────────────────────────────────────
-//
-// Add this composite index in the Firebase Console (or firestore.indexes.json):
-//   Collection: patients
-//   Fields:     therapist_email (ASC), is_archived (ASC), full_name (ASC)
-//
-// Until the index is created, getPatients() falls back to client-side filtering.
-// ──────────────────────────────────────────────────────────────────────────────
 
 function requireAuth() {
   const user = auth.currentUser;
@@ -26,56 +17,89 @@ function requireAuth() {
 function systemFields() {
   const user = auth.currentUser;
   return {
+    ownerId: user?.uid || '',
     created_by: user?.email || '',
     therapist_email: user?.email || '',
   };
 }
 
 /**
- * getPatients — fetch patients with server-side archive filtering.
- *
- * FIX: previously fetched ALL patients then filtered `is_archived` in JS.
- * Now filters server-side. Falls back gracefully if composite index is missing.
+ * getPatients — fetch ALL patients for the current user (both active and archived).
+ * 
+ * CRITICAL FIX: This function now:
+ * 1. Fetches ONLY by ownerId (no complex filters that require indexes)
+ * 2. Performs ALL filtering and sorting in JavaScript
+ * 3. Gracefully handles auth race conditions
+ * 4. Returns empty array instead of throwing on auth failure
  */
-export async function getPatients(therapistEmail, includeArchived = false) {
+export async function getPatients(includeArchived = false) {
   try {
-    // Attempt server-side filter — requires composite index
+    const user = requireAuth();
+    
+    // CRITICAL: Simple query — only ownerId, no composite index required
+    // This prevents "failed-precondition" errors from missing indexes
     const q = query(
       collection(db, COLLECTION),
-      where('therapist_email', '==', therapistEmail),
-      where('is_archived', '==', includeArchived),
-      orderBy('full_name', 'asc')
+      where('ownerId', '==', user.uid)
     );
+    
     const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    
+    console.log(`[patients.js] Fetched ${all.length} total patients for user ${user.uid}`);
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CLIENT-SIDE FILTERING: All filtering happens here, not in Firestore
+    // ═══════════════════════════════════════════════════════════════════════════
+   // ═══════════════════════════════════════════════════════════════════════════
+// CLIENT-SIDE FILTERING: סינון פשוט ובטוח יותר
+// ═══════════════════════════════════════════════════════════════════════════
+const filtered = all.filter(p => {
+  // אם ביקשנו לראות הכל (כולל ארכיון), פשוט נחזיר אמת לכולם
+  if (includeArchived === true) return true;
+
+  // אחרת, נבדוק אם המטופל בארכיון. אם הוא לא - נציג אותו.
+  const isArchived = p.is_archived === true || p.status === 'archived';
+  return !isArchived;
+});
+    
+    console.log(`[patients.js] After filtering: ${filtered.length} patients (includeArchived=${includeArchived})`);
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CLIENT-SIDE SORTING: Sort by full_name in Hebrew alphabetical order
+    // ═══════════════════════════════════════════════════════════════════════════
+    const sorted = filtered.sort((a, b) =>
+      (a.full_name || '').localeCompare(b.full_name || '', 'he')
+    );
+    
+    return sorted;
   } catch (err) {
-    // Index not yet deployed — fall back gracefully with a dev hint
-    if (err.code === 'failed-precondition') {
-      console.warn(
-        '[patients.js] Missing Firestore index for (therapist_email, is_archived, full_name).',
-        'Add it in the Firebase Console to improve performance.',
-        'Falling back to client-side filter.'
-      );
-      const q = query(
-        collection(db, COLLECTION),
-        where('therapist_email', '==', therapistEmail),
-        orderBy('full_name', 'asc')
-      );
-      const snap = await getDocs(q);
-      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      return includeArchived
-        ? all.filter(p => p.is_archived)
-        : all.filter(p => !p.is_archived);
+    console.error('[patients.js] Error in getPatients:', err);
+    
+    // CRITICAL: If auth fails, return empty array instead of throwing
+    // This prevents the entire UI from crashing due to auth race conditions
+    if (err.message === 'User not authenticated') {
+      console.warn('[patients.js] Auth not ready yet, returning empty array');
+      return [];
     }
+    
     throw err;
   }
 }
 
 export async function getPatient(id) {
   if (!id) throw new Error('Patient ID is required');
+  const user = requireAuth();
   const snap = await getDoc(doc(db, COLLECTION, id));
   if (!snap.exists()) throw new Error('Patient not found');
-  return { id: snap.id, ...snap.data() };
+  
+  // Verify ownership
+  const data = snap.data();
+  if (data.ownerId !== user.uid) {
+    throw new Error('Access denied: patient does not belong to you');
+  }
+  
+  return { id: snap.id, ...data };
 }
 
 // Alias used by treatments.js
@@ -98,14 +122,23 @@ export async function createPatient(data) {
     is_archived: false,
     portal_access_enabled: data.portal_access_enabled || false,
     treatment_count: 0, // denormalized — eliminates N+1 queries in patient list
+    last_visit: data.last_visit || null, // Track last treatment date
   });
   return ref.id;
 }
 
 export async function updatePatient(id, data) {
   if (!id) throw new Error('Patient ID is required');
+  const user = requireAuth();
+  
+  // Verify ownership before updating
+  const snap = await getDoc(doc(db, COLLECTION, id));
+  if (!snap.exists() || snap.data().ownerId !== user.uid) {
+    throw new Error('Access denied: patient does not belong to you');
+  }
+  
   // Guard: never let stale UI state overwrite the atomic counter
-  const { treatment_count, ...safeData } = data;
+  const { treatment_count, ownerId, ...safeData } = data;
   await updateDoc(doc(db, COLLECTION, id), {
     ...safeData,
     updated_date: serverTimestamp(),
@@ -135,6 +168,13 @@ export async function incrementTreatmentCount(patientId, delta) {
  */
 export async function deletePatient(patientId) {
   const user = requireAuth();
+  
+  // Verify ownership
+  const snap = await getDoc(doc(db, COLLECTION, patientId));
+  if (!snap.exists() || snap.data().ownerId !== user.uid) {
+    throw new Error('Access denied: patient does not belong to you');
+  }
+  
   const batch = writeBatch(db);
 
   batch.update(doc(db, COLLECTION, patientId), {
@@ -147,8 +187,8 @@ export async function deletePatient(patientId) {
   const apptsSnap = await getDocs(
     query(
       collection(db, 'appointments'),
+      where('ownerId', '==', user.uid),
       where('patient_id', '==', patientId),
-      where('therapist_email', '==', user.email),
       where('date', '>=', today)
     )
   );
@@ -176,6 +216,14 @@ export function validateIsraeliId(id) {
 
 export async function restorePatient(patientId) {
   if (!patientId) throw new Error('Patient ID is required');
+  const user = requireAuth();
+  
+  // Verify ownership
+  const snap = await getDoc(doc(db, COLLECTION, patientId));
+  if (!snap.exists() || snap.data().ownerId !== user.uid) {
+    throw new Error('Access denied: patient does not belong to you');
+  }
+  
   try {
     await updateDoc(doc(db, COLLECTION, patientId), {
       is_archived: false,

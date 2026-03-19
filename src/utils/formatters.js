@@ -15,6 +15,31 @@ export function formatDatetime(dateStr, timeStr) {
   return `${formatDate(dateStr)}${timeStr ? ` ${timeStr}` : ''}`;
 }
 
+/**
+ * localDateStr — converts a Date object to a YYYY-MM-DD string using the
+ * user's LOCAL timezone, not UTC.
+ *
+ * WHY THIS EXISTS:
+ * `date.toISOString().slice(0, 10)` uses UTC time internally. In Israel
+ * (UTC+2 in winter, UTC+3 in summer), a Date that represents midnight local
+ * time is actually 21:00 or 22:00 the PREVIOUS day in UTC. So at any hour
+ * before 02:00/03:00 local time, `toISOString()` returns yesterday's date.
+ * This caused the Calendar's "today" highlight and day headers to be off by
+ * one day.
+ *
+ * This function uses `getFullYear()`, `getMonth()`, `getDate()` which all
+ * read from the local clock, making it timezone-safe.
+ *
+ * USAGE: Replace every `someDate.toISOString().slice(0, 10)` with
+ *        `localDateStr(someDate)` wherever dates are displayed to the user.
+ */
+export function localDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export const PAYMENT_METHODS = [
   { value: 'cash', label: 'מזומן' },
   { value: 'credit', label: 'אשראי' },

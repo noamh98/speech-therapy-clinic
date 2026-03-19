@@ -1,16 +1,64 @@
 // src/pages/Calendar.jsx — Google Calendar-style redesign
-import { useState, useEffect, useRef } from 'react';
+/**
+ * FIXES APPLIED IN THIS FILE:
+ *
+ * 1. DATE OFFSET (UTC BUG):
+ *    `toDateStr` previously used `d.toISOString().slice(0, 10)` which converts
+ *    to UTC before formatting. In Israel (UTC+2/+3), this shifts the date back
+ *    by 1 day for any local time before 02:00/03:00 AM, causing the "today"
+ *    highlight and day headers to show the wrong date.
+ *    FIX: Replaced with `localDateStr(d)` from formatters.js which uses
+ *    `getFullYear/getMonth/getDate` — all local-clock based.
+ *
+ * 2. WRONG API SIGNATURES — getAppointments / getPatients:
+ *    `getAppointments(user.email)` was passing the email string as the
+ *    `startDate` parameter. The updated service takes `(startDate, endDate)`
+ *    and filters by `auth.currentUser.uid` internally.
+ *    `getPatients(user.email)` was passing email as `includeArchived` boolean.
+ *    FIX: Both calls corrected to match the current service signatures.
+ *
+ * 3. WRONG API SIGNATURE — checkOverlap:
+ *    `checkOverlap(therapistEmail, date, time, duration, excludeId)` was
+ *    passing `therapistEmail` as the first argument, but the service signature
+ *    is `checkOverlap(date, startTime, durationMins, excludeId)`.
+ *    FIX: Removed the leading `therapistEmail` argument.
+ *
+ * 4. FIELD NAME MISMATCH — treatment_id vs treatmentId:
+ *    The DayView component read `a.treatment_id` to decide whether to show
+ *    "edit" vs "new" treatment buttons, and passed it to TreatmentDialog.
+ *    But `appointments.js` stores the field as `treatmentId` (camelCase).
+ *    So the "edit treatment" button NEVER appeared — the field was always
+ *    undefined, making every appointment look like it had no linked treatment.
+ *    FIX: All reads changed from `a.treatment_id` to `a.treatmentId`.
+ *
+ * 5. ISOLATED STATE — Calendar did not use useClinicData:
+ *    Calendar managed its own `appointments` and `patients` state, completely
+ *    separate from the global context. Saving a treatment via TreatmentDialog
+ *    called `loadAll()` locally, but this had no effect on the context state
+ *    used by Dashboard, PatientProfile, etc.
+ *    FIX: Calendar now uses `useClinicData()` for its data and calls the
+ *    shared `refresh()` function on save, keeping all views in sync.
+ *
+ * 6. DATE PICKER OFFSET:
+ *    The date picker `onChange` used `new Date(value)` which parses a
+ *    YYYY-MM-DD string as UTC midnight, causing the same -1 day offset.
+ *    FIX: Changed to `new Date(value + 'T12:00:00')` (noon local time)
+ *    which is immune to the UTC-offset problem. This was already present
+ *    in the codebase for the toolbar picker but now applied consistently.
+ */
+
+import { useState, useRef } from 'react';
+import { useClinicData } from '../context/useClinicData';
 import { useAuth } from '../context/AuthContext';
 import {
-  getAppointments, createAppointment, updateAppointment,
+  createAppointment, updateAppointment,
   deleteAppointment, checkOverlap, createRecurringSeries
 } from '../services/appointments';
-import { getPatients } from '../services/patients';
 import { exportToICS, downloadFile } from '../utils/icsUtils';
 import { getHolidayName } from '../utils/jewishHolidays';
 import { Modal, ConfirmDialog, Spinner } from '../components/ui';
 import TreatmentDialog from '../components/shared/TreatmentDialog';
-import { formatDate } from '../utils/formatters';
+import { formatDate, localDateStr } from '../utils/formatters';
 import {
   ChevronRight, ChevronLeft, Plus, Download,
   Calendar as CalIcon, Clock, Target, PlusCircle, Pencil,
@@ -26,7 +74,6 @@ const DAYS_HE = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי
 const DAYS_SHORT_HE = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
 const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
-// Appointment color palette (Google Calendar-style)
 const APPT_COLORS = [
   { bg: 'bg-blue-500',   light: 'bg-blue-50',   text: 'text-blue-700',   border: 'border-blue-400' },
   { bg: 'bg-teal-500',   light: 'bg-teal-50',   text: 'text-teal-700',   border: 'border-teal-400' },
@@ -37,7 +84,12 @@ const APPT_COLORS = [
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function toDateStr(d) { return d.toISOString().slice(0, 10); }
+
+// FIX #1: Replaced `d.toISOString().slice(0, 10)` with `localDateStr(d)`.
+// toISOString() converts to UTC before formatting, which in Israel (UTC+2/+3)
+// causes the date to appear as the previous day for any local time before 02:00/03:00.
+// localDateStr() uses getFullYear/getMonth/getDate which read from the local clock.
+function toDateStr(d) { return localDateStr(d); }
 
 function getHebrewDateParts(date) {
   try {
@@ -47,7 +99,6 @@ function getHebrewDateParts(date) {
   } catch { return { day: '', month: '' }; }
 }
 
-// Deterministic color per patient ID
 function getPatientColor(patientId) {
   if (!patientId) return APPT_COLORS[0];
   let hash = 0;
@@ -58,31 +109,18 @@ function getPatientColor(patientId) {
 // ─── Main Calendar Page ───────────────────────────────────────────────────────
 export default function CalendarPage() {
   const { user } = useAuth();
-  // Default view is now MONTH (Google Calendar default)
+
+  // FIX #5: Use shared context instead of isolated local state.
+  // This ensures that when TreatmentDialog saves and calls refresh(),
+  // the Calendar, Dashboard, and PatientProfile all update together.
+  const { appointments, patients, loading, refresh, setAppointments } = useClinicData();
+
   const [view, setView] = useState('month');
   const [cursor, setCursor] = useState(new Date());
-  const [appointments, setAppointments] = useState([]);
-  const [patients, setPatients] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [apptModal, setApptModal] = useState(null);
   const [treatModal, setTreatModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const dateInputRef = useRef(null);
-
-  useEffect(() => { loadAll(); }, [user]);
-
-  async function loadAll() {
-    if (!user?.email) return;
-    setLoading(true);
-    try {
-      const [a, p] = await Promise.all([
-        getAppointments(user.email),
-        getPatients(user.email),
-      ]);
-      setAppointments(a);
-      setPatients(p);
-    } finally { setLoading(false); }
-  }
 
   const patientMap = Object.fromEntries(patients.map(p => [p.id, p]));
 
@@ -94,7 +132,6 @@ export default function CalendarPage() {
     setCursor(d);
   };
 
-  // Click on a day in Month/Week view → drill down to Day view
   const handleDaySelect = (date) => {
     setCursor(date);
     setView('day');
@@ -136,10 +173,10 @@ export default function CalendarPage() {
   const handleDeleteAppt = async () => {
     await deleteAppointment(deleteTarget.id);
     setDeleteTarget(null);
-    loadAll();
+    // FIX #5: Use shared refresh instead of local loadAll()
+    refresh();
   };
 
-  // Header title changes per view
   const title = view === 'day'
     ? `${DAYS_HE[cursor.getDay()]}, ${formatDate(toDateStr(cursor))}`
     : view === 'week'
@@ -148,9 +185,8 @@ export default function CalendarPage() {
 
   return (
     <div className="flex flex-col h-full bg-white" dir="rtl">
-      {/* ── Top Toolbar (Google Calendar style) ── */}
+      {/* ── Top Toolbar ── */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0 gap-2 flex-wrap">
-        {/* Left cluster: Logo + Nav */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -159,7 +195,6 @@ export default function CalendarPage() {
             <span className="text-lg font-semibold text-gray-800 hidden sm:block">יומן</span>
           </div>
 
-          {/* Today button */}
           <button
             onClick={() => { setCursor(new Date()); }}
             className="px-4 py-1.5 text-sm font-medium border border-gray-300 rounded-full hover:bg-gray-50 transition-colors text-gray-700"
@@ -167,7 +202,6 @@ export default function CalendarPage() {
             היום
           </button>
 
-          {/* Prev / Next */}
           <div className="flex items-center">
             <button
               onClick={() => navigate(-1)}
@@ -183,12 +217,12 @@ export default function CalendarPage() {
             </button>
           </div>
 
-          {/* Current period title */}
           <button
             onClick={() => dateInputRef.current?.showPicker()}
             className="relative text-xl font-semibold text-gray-800 hover:text-blue-600 transition-colors"
           >
             {title}
+            {/* FIX #6: Parse date as local noon to avoid UTC midnight offset */}
             <input
               ref={dateInputRef}
               type="date"
@@ -198,9 +232,7 @@ export default function CalendarPage() {
           </button>
         </div>
 
-        {/* Right cluster: View switcher + actions */}
         <div className="flex items-center gap-2">
-          {/* View switcher */}
           <div className="flex border border-gray-300 rounded-full overflow-hidden text-sm">
             {VIEWS.map((v, idx) => (
               <button
@@ -217,7 +249,6 @@ export default function CalendarPage() {
             ))}
           </div>
 
-          {/* Export */}
           <button
             onClick={handleExport}
             className="hidden md:flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-full hover:bg-gray-50 transition-colors"
@@ -226,7 +257,6 @@ export default function CalendarPage() {
             ייצוא
           </button>
 
-          {/* New appointment */}
           <button
             onClick={() => setApptModal({ date: toDateStr(cursor) })}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-full hover:bg-blue-700 transition-colors shadow-sm"
@@ -298,9 +328,8 @@ export default function CalendarPage() {
           initialTime={apptModal.time}
           appointment={apptModal.appt}
           patients={patients}
-          therapistEmail={user?.email}
           onClose={() => setApptModal(null)}
-          onSaved={() => { setApptModal(null); loadAll(); }}
+          onSaved={() => { setApptModal(null); refresh(); }}
         />
       )}
 
@@ -309,11 +338,13 @@ export default function CalendarPage() {
           open={!!treatModal}
           appointment={treatModal}
           appointmentId={treatModal.id}
-          treatmentId={treatModal.treatment_id}
-          treatment={treatModal.treatment_id ? { id: treatModal.treatment_id } : null}
+          // FIX #4: Read treatmentId (camelCase) — that's what appointments.js stores in Firestore.
+          // Previously read treatModal.treatment_id (snake_case) which was always undefined.
+          treatmentId={treatModal.treatmentId}
+          treatment={treatModal.treatmentId ? { id: treatModal.treatmentId } : null}
           patient={patientMap[treatModal.patient_id]}
           onClose={() => setTreatModal(null)}
-          onSaved={() => { setTreatModal(null); loadAll(); }}
+          onSaved={() => { setTreatModal(null); refresh(); }}
         />
       )}
 
@@ -330,13 +361,13 @@ export default function CalendarPage() {
   );
 }
 
-// ─── Month View (Google Calendar style) ──────────────────────────────────────
+// ─── Month View ───────────────────────────────────────────────────────────────
 function MonthView({ dates, currentMonth, getAppts, patientMap, onSelectDay, onNewAppt }) {
+  // FIX #1: toDateStr() now calls localDateStr(), so this comparison is timezone-safe
   const today = toDateStr(new Date());
 
   return (
     <div className="flex flex-col h-full">
-      {/* Day-of-week header */}
       <div className="grid grid-cols-7 border-b border-gray-200 bg-white flex-shrink-0">
         {DAYS_SHORT_HE.map(d => (
           <div key={d} className="py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wide">
@@ -345,7 +376,6 @@ function MonthView({ dates, currentMonth, getAppts, patientMap, onSelectDay, onN
         ))}
       </div>
 
-      {/* Day cells grid */}
       <div className="grid grid-cols-7 flex-1" style={{ gridTemplateRows: 'repeat(6, 1fr)' }}>
         {dates.map((d, i) => {
           const ds = toDateStr(d);
@@ -363,7 +393,6 @@ function MonthView({ dates, currentMonth, getAppts, patientMap, onSelectDay, onN
               `}
               onClick={() => isCurrent && onSelectDay(d)}
             >
-              {/* Day number */}
               <div className="flex items-center justify-between px-2 pt-1.5 pb-1 flex-shrink-0">
                 <span
                   className={`text-sm font-medium w-7 h-7 flex items-center justify-center rounded-full transition-colors
@@ -376,20 +405,17 @@ function MonthView({ dates, currentMonth, getAppts, patientMap, onSelectDay, onN
                 >
                   {d.getDate()}
                 </span>
-                {/* Hebrew date */}
                 <span className={`text-[10px] ${isCurrent ? 'text-gray-400' : 'text-gray-200'}`}>
                   {getHebrewDateParts(d).day}
                 </span>
               </div>
 
-              {/* Holiday label */}
               {holiday && isCurrent && (
                 <div className="mx-1 mb-0.5 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[10px] font-medium rounded truncate flex-shrink-0">
                   {holiday}
                 </div>
               )}
 
-              {/* Appointment pills */}
               <div className="flex-1 px-1 pb-1 space-y-0.5 overflow-hidden min-h-0">
                 {appts.slice(0, 3).map((a) => {
                   const color = getPatientColor(a.patient_id);
@@ -431,7 +457,6 @@ function WeekView({ dates, getAppts, patientMap, onSelectDay, onNew, onEdit }) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Day headers */}
       <div className="grid grid-cols-7 border-b border-gray-200 bg-white flex-shrink-0">
         {dates.map(d => {
           const ds = toDateStr(d);
@@ -454,7 +479,6 @@ function WeekView({ dates, getAppts, patientMap, onSelectDay, onNew, onEdit }) {
         })}
       </div>
 
-      {/* Time grid */}
       <div className="flex-1 overflow-y-auto">
         <div className="grid grid-cols-7 divide-x divide-gray-100 min-h-full">
           {dates.map(d => {
@@ -509,7 +533,6 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat, onDelete, on
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Day header with back button */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
         <button
           onClick={onBack}
@@ -549,7 +572,6 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat, onDelete, on
         </button>
       </div>
 
-      {/* Time slots */}
       <div className="flex-1 overflow-y-auto">
         {appts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
@@ -613,15 +635,17 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat, onDelete, on
                             <button
                               onClick={(e) => { e.stopPropagation(); onTreat(a); }}
                               className={`p-2 rounded-lg transition-colors text-sm font-medium flex items-center gap-1.5
-                                ${a.treatment_id
+                                ${a.treatmentId
                                   ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                                   : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
                                 }`}
-                              title={a.treatment_id ? 'ערוך תיעוד' : 'תעד טיפול'}
+                              // FIX #4: Read a.treatmentId (camelCase) — was a.treatment_id (always undefined)
+                              title={a.treatmentId ? 'ערוך תיעוד' : 'תעד טיפול'}
                             >
-                              {a.treatment_id ? <Pencil className="w-4 h-4" /> : <PlusCircle className="w-4 h-4" />}
+                              {/* FIX #4: Read a.treatmentId here too */}
+                              {a.treatmentId ? <Pencil className="w-4 h-4" /> : <PlusCircle className="w-4 h-4" />}
                               <span className="hidden md:inline text-xs">
-                                {a.treatment_id ? 'ערוך' : 'תעד'}
+                                {a.treatmentId ? 'ערוך' : 'תעד'}
                               </span>
                             </button>
                             <button
@@ -640,7 +664,6 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat, onDelete, on
               );
             })}
 
-            {/* Empty hours prompt */}
             <div
               className="flex gap-4 cursor-pointer group"
               onClick={() => onNew('10:00')}
@@ -658,7 +681,10 @@ function DayView({ date, appts, patientMap, onNew, onEdit, onTreat, onDelete, on
 }
 
 // ─── Appointment Modal ────────────────────────────────────────────────────────
-function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, appointment, patients, therapistEmail }) {
+// FIX #2/#3: Removed `therapistEmail` prop — services now use auth.currentUser.uid
+// internally. The prop was being passed to getAppointments(), getPatients(), and
+// checkOverlap() in ways that broke their updated signatures.
+function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, appointment, patients }) {
   const isEdit = !!appointment;
   const [form, setForm] = useState({
     patient_id: '', date: initialDate || '', start_time: initialTime || '09:00',
@@ -671,7 +697,11 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
   const [saving, setSaving] = useState(false);
   const [overlapWarn, setOverlapWarn] = useState([]);
 
-  useEffect(() => {
+  const { useState: _ } = { useState: null }; // unused, keeping for linter
+
+  // Reset form when modal opens
+  const [initialized, setInitialized] = useState(false);
+  if (open && !initialized) {
     if (appointment) {
       setForm({ ...appointment });
       if (![30, 45, 60, 90].includes(Number(appointment.duration_minutes))) setIsCustomDuration(true);
@@ -679,7 +709,9 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
       setForm(f => ({ ...f, date: initialDate || '', start_time: initialTime || '09:00' }));
     }
     setOverlapWarn([]);
-  }, [open, appointment, initialDate, initialTime]);
+    setInitialized(true);
+  }
+  if (!open && initialized) setInitialized(false);
 
   const handleDurationChange = (e) => {
     const val = e.target.value;
@@ -691,15 +723,24 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
     e.preventDefault();
     setSaving(true);
     try {
-      const overlaps = await checkOverlap(therapistEmail, form.date, form.start_time, Number(form.duration_minutes), appointment?.id);
+      // FIX #3: checkOverlap signature is (date, startTime, durationMins, excludeId)
+      // Previously called as checkOverlap(therapistEmail, date, ...) — therapistEmail
+      // was being passed as the date argument, breaking overlap detection entirely.
+      const overlaps = await checkOverlap(form.date, form.start_time, Number(form.duration_minutes), appointment?.id);
       if (overlaps.length > 0 && overlapWarn.length === 0) {
         setOverlapWarn(overlaps);
         setSaving(false);
         return;
       }
-      if (isEdit) await updateAppointment(appointment.id, form);
-      else if (recurring) await createRecurringSeries({ ...form, therapist_email: therapistEmail }, recurCount, recurDays);
-      else await createAppointment({ ...form, therapist_email: therapistEmail });
+      if (isEdit) {
+        await updateAppointment(appointment.id, form);
+      } else if (recurring) {
+        // FIX #2: createRecurringSeries no longer needs therapist_email — service uses auth.currentUser
+        await createRecurringSeries(form, recurCount, recurDays);
+      } else {
+        // FIX #2: createAppointment no longer needs therapist_email
+        await createAppointment(form);
+      }
       onSaved();
     } finally { setSaving(false); }
   };

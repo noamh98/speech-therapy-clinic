@@ -74,7 +74,9 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, profile, loading, login, loginWithGoogle, logout, resetPassword, isAdmin
+      user, profile, loading, login, loginWithGoogle, logout, resetPassword, isAdmin,
+      // Multi-tenancy: expose currentUser.uid for ownerId field
+      currentUserId: user?.uid || null,
     }}>
       {children}
     </AuthContext.Provider>

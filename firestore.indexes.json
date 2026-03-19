@@ -1,244 +1,96 @@
 {
   "indexes": [
     {
-      "collectionGroup": "appointments",
+      "collectionGroup": "patients",
       "queryScope": "COLLECTION",
       "fields": [
-        {
-          "fieldPath": "patient_id",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "date",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "appointments",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "patient_id",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "date",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "appointments",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "patient_id",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "therapist_email",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "date",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "appointments",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "series_id",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "date",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "appointments",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "therapist_email",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "date",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
-    },
-    {
-      "collectionGroup": "intakeForms",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "therapist_email",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "date",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "is_archived", "order": "ASCENDING" },
+        { "fieldPath": "full_name", "order": "ASCENDING" }
+      ]
     },
     {
       "collectionGroup": "patients",
       "queryScope": "COLLECTION",
       "fields": [
-        {
-          "fieldPath": "therapist_email",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "full_name",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "full_name", "order": "ASCENDING" }
+      ]
     },
     {
-      "collectionGroup": "progress",
+      "collectionGroup": "appointments",
       "queryScope": "COLLECTION",
       "fields": [
-        {
-          "fieldPath": "patient_id",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "date",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "appointments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "patient_id", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "treatments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "treatments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "patient_id", "order": "ASCENDING" }
+      ]
     },
     {
       "collectionGroup": "templates",
       "queryScope": "COLLECTION",
       "fields": [
-        {
-          "fieldPath": "therapist_email",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "name",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "name", "order": "ASCENDING" }
+      ]
     },
     {
-      "collectionGroup": "treatments",
+      "collectionGroup": "notifications",
       "queryScope": "COLLECTION",
       "fields": [
-        {
-          "fieldPath": "patient_id",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "therapist_email",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "treatment_number",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "created_date", "order": "DESCENDING" }
+      ]
     },
     {
-      "collectionGroup": "treatments",
+      "collectionGroup": "payments",
       "queryScope": "COLLECTION",
       "fields": [
-        {
-          "fieldPath": "patient_id",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "treatment_number",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "payment_date", "order": "DESCENDING" }
+      ]
     },
     {
-      "collectionGroup": "treatments",
+      "collectionGroup": "payments",
       "queryScope": "COLLECTION",
       "fields": [
-        {
-          "fieldPath": "therapist_email",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "date",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ],
-      "density": "SPARSE_ALL"
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "treatment_id", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

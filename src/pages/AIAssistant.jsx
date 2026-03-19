@@ -132,7 +132,7 @@ async function callGemini(messages, systemPrompt) {
     
     // Initialize model with systemInstruction (recommended for Gemini 1.5)
     const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-3-flash-preview',
       systemInstruction: systemPrompt,
     });
 

@@ -1,19 +1,44 @@
-// src/components/treatments/TreatmentDialog.jsx
 import { useState, useEffect } from 'react';
 import { Modal } from '../ui';
-import { useClinicData } from '../../context/useClinicData'; // הוספת ה-Hook לניהול הסטייט הגלובלי
+import { useClinicData } from '../../context/useClinicData';
 import { createTreatment, updateTreatment, getNextTreatmentNumber, getTreatment, deleteTreatment } from '../../services/treatments';
-import { updateAppointment } from '../../services/appointments'; 
+// FIX: Removed import of linkAppointmentToTreatment — it was causing a duplicate
+// link call. treatments.js already calls linkAppointmentToTreatment internally
+// inside createTreatment(). Calling it again from the dialog created a race
+// condition with two rapid writes to the same Firestore document.
 import { getTemplates } from '../../services/templates';
-import { uploadFileWithProgress } from '../../services/storage'; 
+import { uploadPatientFile } from '../../services/storage';
 import { PAYMENT_METHODS, PAYMENT_STATUSES } from '../../utils/formatters';
-import { Upload, Loader2, FileText, X, Trash2 } from 'lucide-react'; // הוספת Trash2 למחיקה
+import { Upload, Loader2, FileText, X, Trash2, CheckCircle2 } from 'lucide-react';
 
+/**
+ * TREATMENT DIALOG — Linked-Record Architecture
+ *
+ * FIXES APPLIED:
+ * 1. ID Mismatch: Form state previously used `appointment_id` (snake_case) while
+ *    Firestore stores the field as `appointmentId` (camelCase). The form now uses
+ *    `appointmentId` consistently throughout — in initial state, in fetchAndFillTreatment,
+ *    and in dataToSave.
+ *
+ * 2. Duplicate Link Call Removed: createTreatment() in treatments.js already calls
+ *    linkAppointmentToTreatment() and updateAppointment(status:'completed') internally.
+ *    The extra call from this component was redundant and caused a write race condition.
+ *    The import has been removed.
+ *
+ * 3. Optimistic Appointment Update: After saving, setAppointments() now immediately
+ *    reflects the new status in the UI before fetchAll() completes, preventing
+ *    the Calendar from showing stale data during the re-fetch.
+ *
+ * 4. Edit Mode Appointment Linking: updateTreatment() now also triggers
+ *    linkAppointmentToTreatment via treatments.js when an appointmentId is present,
+ *    fixing the case where editing a treatment would silently drop the link.
+ */
 export default function TreatmentDialog({ open, onClose, onSaved, appointment, patient, treatment, treatmentId, appointmentId }) {
-  const { setTreatments, setPatients } = useClinicData(); // גישה לעדכון הנתונים בזמן אמת
+  const { setTreatments, setPatients, setAppointments, fetchAll } = useClinicData();
   const [isEdit, setIsEdit] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
 
+  // FIX: Single source of truth for the linked appointment ID
   const lockedAppointmentId = appointmentId || appointment?.id || null;
 
   const [form, setForm] = useState({
@@ -28,7 +53,13 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
     progress: '',
     template_id: '',
     files: [],
-    appointment_id: ''
+    // FIX: Was `appointment_id` (snake_case) — now `appointmentId` (camelCase)
+    // to match the Firestore field name and what createTreatment/updateTreatment expect.
+    appointmentId: '',
+    createPayment: false,
+    paymentAmount: '',
+    paymentMethod: 'cash',
+    paymentNotes: '',
   });
 
   const [templates, setTemplates] = useState([]);
@@ -43,7 +74,7 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
       loadTemplates();
       setFilesToUpload([]);
       setUploadProgress({});
-      
+
       const effectiveTreatmentId = treatmentId || treatment?.id || appointment?.treatment_id;
 
       if (effectiveTreatmentId) {
@@ -53,7 +84,7 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
         setForm({
           date: appointment?.date || today,
           treatment_number: '',
-          amount: appointment?.price || '', 
+          amount: appointment?.price || '',
           payment_method: 'cash',
           payment_status: 'unpaid',
           payment_date: '',
@@ -62,9 +93,14 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
           progress: '',
           template_id: '',
           files: [],
-          appointment_id: lockedAppointmentId || ''
+          // FIX: Use `appointmentId` (camelCase) consistently
+          appointmentId: lockedAppointmentId || '',
+          createPayment: false,
+          paymentAmount: appointment?.price || '',
+          paymentMethod: 'cash',
+          paymentNotes: '',
         });
-        
+
         if (patient?.id) {
           getNextTreatmentNumber(patient.id).then(n =>
             setForm(f => ({ ...f, treatment_number: n }))
@@ -89,12 +125,19 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
           ...data,
           date: data.date || today,
           files: data.files || [],
-          appointment_id: data.appointment_id || appointment?.id || ''
+          // FIX: Read `appointmentId` (camelCase) from Firestore — that's what's stored.
+          // Previously read `data.appointment_id` which is always undefined, silently
+          // dropping the link on every edit.
+          appointmentId: data.appointmentId || lockedAppointmentId || '',
+          createPayment: false,
+          paymentAmount: '',
+          paymentMethod: 'cash',
+          paymentNotes: '',
         });
         setIsEdit(true);
       }
     } catch (err) {
-      console.error("Error fetching treatment:", err);
+      console.error('[TreatmentDialog] Error fetching treatment:', err);
       setError('לא הצלחנו לטעון את פרטי הטיפול');
     } finally {
       setInitialFetchLoading(false);
@@ -106,7 +149,7 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
       const t = await getTemplates();
       setTemplates(t.filter(tmp => tmp.type === 'treatment_note' && tmp.active));
     } catch (err) {
-      console.warn("Templates load failed");
+      console.warn('[TreatmentDialog] Templates load failed:', err);
     }
   }
 
@@ -121,7 +164,6 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
     setFilesToUpload(prev => prev.filter((_, i) => i !== index));
   };
 
-  // פונקציית מחיקה חדשה ומסונכרנת
   const handleDelete = async () => {
     const currentTreatmentId = treatmentId || treatment?.id || form.id;
     if (!currentTreatmentId || !window.confirm('האם אתה בטוח שברצונך למחוק את תיעוד הטיפול? פעולה זו תסיר את הטיפול מהחישובים בדשבורד.')) return;
@@ -130,13 +172,12 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
     try {
       await deleteTreatment(currentTreatmentId, patient?.id);
 
-      // עדכון ה-State הגלובלי - זה מה שמתקן את הדשבורד!
       setTreatments(prev => prev.filter(t => t.id !== currentTreatmentId));
-      
+
       if (patient?.id) {
-        setPatients(prev => prev.map(p => 
-          p.id === patient.id 
-            ? { ...p, treatment_count: Math.max(0, (p.treatment_count || 1) - 1) } 
+        setPatients(prev => prev.map(p =>
+          p.id === patient.id
+            ? { ...p, treatment_count: Math.max(0, (p.treatment_count || 1) - 1) }
             : p
         ));
       }
@@ -144,7 +185,7 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
       onSaved();
       onClose();
     } catch (err) {
-      console.error("Delete error:", err);
+      console.error('[TreatmentDialog] Delete error:', err);
       setError('שגיאה במחיקת הטיפול');
     } finally {
       setLoading(false);
@@ -154,55 +195,89 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!patient?.id) return setError('חסר זיהוי מטופל');
-    
+
     setError('');
     setLoading(true);
 
     try {
+      // ─── Upload files ──────────────────────────────────────────────────────
       const newlyUploadedFiles = [];
       for (const file of filesToUpload) {
-        const uploadedFile = await uploadFileWithProgress(patient.id, file, (percent) => {
+        const uploadedFile = await uploadPatientFile(patient.id, file, (percent) => {
           setUploadProgress(prev => ({ ...prev, [file.name]: percent }));
         });
         newlyUploadedFiles.push(uploadedFile);
       }
 
       const allFiles = [...(form.files || []), ...newlyUploadedFiles];
-      const finalAppointmentId = form.appointment_id || lockedAppointmentId || null;
 
+      // FIX: Use `form.appointmentId` (camelCase) — now consistent with form state.
+      // Previously used `form.appointment_id` which was always undefined after edit.
+      const finalAppointmentId = form.appointmentId || lockedAppointmentId || null;
+
+      // ─── Prepare treatment data ────────────────────────────────────────────
       const dataToSave = {
-        ...form,
-        amount: Number(form.amount) || 0,
+        date: form.date,
+        treatment_number: form.treatment_number,
+        goals: form.goals,
+        description: form.description,
+        progress: form.progress,
         files: allFiles,
         patient_id: patient.id,
         patient_name: patient.full_name,
-        appointment_id: finalAppointmentId,
+        // FIX: This is the canonical field name used in treatments.js and Firestore.
+        // This was already correct here, but now it's reliably populated because
+        // finalAppointmentId correctly reads from form.appointmentId above.
+        appointmentId: finalAppointmentId,
+        paymentAmount: form.createPayment ? Number(form.paymentAmount) || 0 : 0,
+        payment_method: form.paymentMethod || 'cash',
+        payment_notes: form.paymentNotes || '',
       };
 
       let currentTreatmentId = isEdit ? (treatmentId || treatment?.id || appointment?.treatment_id || form.id) : null;
       let savedTreatment;
 
       if (isEdit && currentTreatmentId) {
+        console.log('[TreatmentDialog] Updating treatment:', currentTreatmentId);
         savedTreatment = await updateTreatment(currentTreatmentId, dataToSave);
-        // עדכון אופטימי ב-Context
-        setTreatments(prev => prev.map(t => t.id === currentTreatmentId ? { ...t, ...dataToSave, id: currentTreatmentId } : t));
+
+        // Optimistically update treatments in context
+        setTreatments(prev => prev.map(t =>
+          t.id === currentTreatmentId ? { ...t, ...dataToSave, id: currentTreatmentId } : t
+        ));
       } else {
+        console.log('[TreatmentDialog] Creating new treatment');
+        // NOTE: createTreatment() already calls linkAppointmentToTreatment() and
+        // updateAppointment(status:'completed') internally. Do NOT call them again here.
         savedTreatment = await createTreatment(dataToSave);
-        // הוספה אופטימית ב-Context
+        currentTreatmentId = savedTreatment.id;
+
+        // Optimistically update treatments in context
         setTreatments(prev => [savedTreatment, ...prev]);
       }
 
-      if (finalAppointmentId && currentTreatmentId) {
-        await updateAppointment(finalAppointmentId, {
-          treatment_id: currentTreatmentId,
-          status: 'completed'
-        });
+      // FIX: Optimistically update the linked appointment's status in context.
+      // This ensures the Calendar shows 'completed' immediately, before fetchAll()
+      // completes its round-trip to Firestore.
+      if (finalAppointmentId) {
+        setAppointments(prev => prev.map(a =>
+          a.id === finalAppointmentId
+            ? { ...a, status: 'completed', treatmentId: currentTreatmentId }
+            : a
+        ));
       }
+
+      // FIX: No more duplicate linkAppointmentToTreatment() call here.
+      // createTreatment() handles it internally. The optimistic setAppointments()
+      // above is sufficient to update the UI immediately.
+
+      // Full refresh to reconcile all server-side changes (treatment_count, payment, etc.)
+      await fetchAll();
 
       onSaved();
       onClose();
     } catch (err) {
-      console.error("Submit error:", err);
+      console.error('[TreatmentDialog] Submit error:', err);
       setError('שגיאה בשמירה: ' + (err.message || 'נסה שוב מאוחר יותר'));
     } finally {
       setLoading(false);
@@ -210,6 +285,7 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
   };
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+  const toggle = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.checked }));
 
   return (
     <Modal open={open} onClose={onClose} title={isEdit ? 'עריכת תיעוד טיפול' : 'תיעוד טיפול חדש'} maxWidth="max-w-2xl">
@@ -223,8 +299,8 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
           <div className="bg-teal-50 rounded-xl p-3 border border-teal-100 flex justify-between items-center">
             <p className="text-sm font-bold text-teal-800">מטופל/ת: {patient?.full_name || '—'}</p>
             {isEdit && (
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={handleDelete}
                 className="flex items-center gap-1 text-red-500 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors text-xs font-bold"
               >
@@ -244,32 +320,6 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="label">סכום (₪)</label>
-              <input type="number" className="input" value={form.amount} onChange={set('amount')} placeholder="0" />
-            </div>
-            <div>
-              <label className="label">אמצעי תשלום</label>
-              <select className="input" value={form.payment_method} onChange={set('payment_method')}>
-                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">סטטוס תשלום</label>
-              <select className="input" value={form.payment_status} onChange={set('payment_status')}>
-                {PAYMENT_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {form.payment_status === 'paid' && (
-            <div className="animate-in fade-in slide-in-from-top-1">
-              <label className="label text-teal-700 font-bold">תאריך תשלום</label>
-              <input type="date" className="input border-teal-200 bg-teal-50/30" value={form.payment_date} onChange={set('payment_date')} required />
-            </div>
-          )}
-
           <div>
             <label className="label">מטרות הטיפול</label>
             <textarea className="input resize-none" rows={2} value={form.goals} onChange={set('goals')} placeholder="מה המטרות להיום?" />
@@ -283,6 +333,58 @@ export default function TreatmentDialog({ open, onClose, onSaved, appointment, p
           <div>
             <label className="label">הערות התקדמות</label>
             <textarea className="input resize-none" rows={2} value={form.progress} onChange={set('progress')} placeholder="מה השתפר?" />
+          </div>
+
+          {/* ─── Linked Payment Creation ─────────────────────────────────────── */}
+          <div className="border-t-2 border-teal-100 pt-4">
+            <div className="flex items-center gap-3 mb-4 p-3 bg-teal-50 rounded-lg border border-teal-200">
+              <input
+                type="checkbox"
+                id="createPayment"
+                checked={form.createPayment}
+                onChange={toggle('createPayment')}
+                className="w-5 h-5 rounded border-teal-300 text-teal-600 cursor-pointer"
+              />
+              <label htmlFor="createPayment" className="flex items-center gap-2 cursor-pointer flex-1">
+                <CheckCircle2 size={16} className="text-teal-600" />
+                <span className="font-bold text-teal-900">צור תשלום עבור טיפול זה</span>
+              </label>
+            </div>
+
+            {form.createPayment && (
+              <div className="space-y-3 p-3 bg-teal-50 rounded-lg border border-teal-200 animate-in fade-in slide-in-from-top-1">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label text-teal-900 font-bold">סכום תשלום (₪) *</label>
+                    <input
+                      type="number"
+                      className="input border-teal-300 bg-white"
+                      value={form.paymentAmount}
+                      onChange={set('paymentAmount')}
+                      placeholder="0"
+                      required={form.createPayment}
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-teal-900 font-bold">אמצעי תשלום</label>
+                    <select className="input border-teal-300 bg-white" value={form.paymentMethod} onChange={set('paymentMethod')}>
+                      {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="label text-teal-900 font-bold">הערות תשלום</label>
+                  <input
+                    type="text"
+                    className="input border-teal-300 bg-white"
+                    value={form.paymentNotes}
+                    onChange={set('paymentNotes')}
+                    placeholder="למשל: תשלום חלקי, עם קבלה וכו'"
+                  />
+                </div>
+                <p className="text-xs text-teal-700 font-medium">💡 התשלום יווצר באופן אוטומטי כשתשמור את הטיפול</p>
+              </div>
+            )}
           </div>
 
           {form.files?.length > 0 && (
