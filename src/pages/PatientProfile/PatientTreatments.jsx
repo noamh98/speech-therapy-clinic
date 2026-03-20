@@ -25,7 +25,7 @@ import { PaymentHistory } from '../../components/shared/PaymentHistory';
 import { PaymentModal } from '../../components/shared/PaymentModal';
 import { Badge, EmptyState, ConfirmDialog, Spinner } from '../../components/ui';
 import { Calendar, Plus, Pencil, Trash2, FileText, DollarSign } from 'lucide-react';
-import { formatDate } from '../../utils/formatters';
+import { formatDate, localDateStr } from '../../utils/formatters';
 import TreatmentDialog from '../../components/shared/TreatmentDialog';
 
 export default function PatientAppointments({ patient }) {
@@ -162,8 +162,15 @@ export default function PatientAppointments({ patient }) {
                       {formatDate(appt.date)} בשעה {appt.start_time || appt.time}
                     </p>
                     <div className="flex items-center gap-2 mt-1">
-                      <Badge color={new Date(appt.date) > new Date() ? 'blue' : 'gray'}>
-                        {new Date(appt.date) > new Date() ? 'מתוכנן' : 'עבר'}
+                      {/* FIX: Compare date strings directly, not Date objects.
+                          new Date(appt.date) > new Date() was broken because:
+                          new Date('2025-03-20') parses as UTC midnight = 02:00 local.
+                          Any local time after 02:00 on the appointment day made the
+                          comparison false — today's appointments showed as "עבר" (past).
+                          String comparison appt.date >= todayStr is timezone-safe and
+                          always evaluates correctly regardless of local time. */}
+                      <Badge color={appt.date >= localDateStr(new Date()) ? 'blue' : 'gray'}>
+                        {appt.date >= localDateStr(new Date()) ? 'מתוכנן' : 'עבר'}
                       </Badge>
                       {/* FIX #1: Read appt.treatmentId (camelCase) */}
                       {appt.treatmentId && (

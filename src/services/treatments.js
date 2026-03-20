@@ -205,7 +205,8 @@ export async function createTreatment(data) {
   const treatmentNumber = data.treatment_number || (await getNextTreatmentNumber(data.patient_id));
 
   const treatmentData = {
-    date: data.date || new Date().toISOString().slice(0, 10),
+    // FIX: localDateStr() instead of toISOString().slice(0,10) — see function above.
+    date: data.date || localDateStr(),
     treatment_number: Number(treatmentNumber) || 1,
     patient_id: data.patient_id,
     patient_name: data.patient_name || '',
@@ -426,6 +427,16 @@ export async function getTreatmentStats(startDate, endDate) {
     console.error('[treatments.js] Error getting treatment stats:', error);
     return { total_count: 0, total_treatments: 0 };
   }
+}
+
+// FIX: localDateStr() — timezone-safe local date. toISOString() converts to UTC
+// first, which in Israel (UTC+2/+3) shifts local midnight to the previous UTC day,
+// causing the stored date to be one day behind the date shown in the UI.
+function localDateStr(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 // Alias to prevent import errors in components that use getTreatmentById

@@ -8,7 +8,7 @@ import { getPatient } from '../services/patients';
 import { getPatientTreatments } from '../services/treatments';
 import { getPatientAppointments } from '../services/appointments';
 import { Spinner, Badge } from '../components/ui';
-import { formatDate, formatCurrency, APPOINTMENT_STATUSES } from '../utils/formatters';
+import { formatDate, formatCurrency, localDateStr, APPOINTMENT_STATUSES } from '../utils/formatters';
 import { Stethoscope, Calendar, ClipboardList } from 'lucide-react';
 
 export default function PatientPortal() {
@@ -19,7 +19,10 @@ export default function PatientPortal() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const today = new Date().toISOString().slice(0, 10);
+  // FIX: localDateStr() — timezone-safe. toISOString() returns yesterday before
+  // 02:00/03:00 AM local time in Israel, causing upcoming appointments on the
+  // real today to be excluded from the portal's "תורים קרובים" list.
+  const today = localDateStr();
 
   useEffect(() => { load(); }, [patientId]);
 

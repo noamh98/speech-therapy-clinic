@@ -7,7 +7,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { DollarSign, Activity, Users, TrendingUp, Download } from 'lucide-react';
-import { formatCurrency, PAYMENT_METHODS } from '../utils/formatters';
+import { formatCurrency, localDateStr, PAYMENT_METHODS } from '../utils/formatters';
 
 const PERIODS = [
   { value: '1', label: 'חודש אחרון' },
@@ -29,7 +29,11 @@ export default function Reports() {
     const months = parseInt(period);
     const cutoff = new Date();
     cutoff.setMonth(cutoff.getMonth() - months);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    // FIX: localDateStr() instead of toISOString().slice(0,10).
+    // setMonth() mutates the Date in local time, but toISOString() then converts
+    // to UTC — in Israel (UTC+2/+3) this shifts the cutoff one day earlier than
+    // intended, causing the most recent day to be excluded from every report filter.
+    const cutoffStr = localDateStr(cutoff);
     return items.filter(i => (i.date || '') >= cutoffStr);
   }
 
@@ -100,7 +104,7 @@ export default function Reports() {
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `report-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    a.href = url; a.download = `report-${localDateStr()}.csv`; a.click();
   };
 
   if (loading) return <div className="flex justify-center py-12"><Spinner size="lg" /></div>;

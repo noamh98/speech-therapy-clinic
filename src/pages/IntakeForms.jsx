@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { getPatients } from '../services/patients';
 import { PageHeader, Card, Modal, Badge, EmptyState } from '../components/ui';
 import { FileText, Plus, Pencil } from 'lucide-react';
-import { formatDate } from '../utils/formatters';
+import { formatDate, localDateStr } from '../utils/formatters';
 
 export default function IntakeForms() {
   const { user } = useAuth();
@@ -14,7 +14,7 @@ export default function IntakeForms() {
   const [patients, setPatients] = useState([]);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({
-    patient_id: '', filled_by: '', date: new Date().toISOString().slice(0, 10),
+    patient_id: '', filled_by: '', date: localDateStr(),
     status: 'draft', chief_complaint: '', medical_history: '',
     medications: '', allergies: '', developmental_history: '',
     previous_treatments: '', family_history: '', education: '',

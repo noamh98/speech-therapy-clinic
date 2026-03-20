@@ -10,6 +10,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { localDateStr } from '../utils/formatters';
 
 // ─── Suggested prompts (grouped by category) ─────────────────────────────
 const SUGGESTED_GROUPS = [
@@ -57,7 +58,9 @@ function buildSystemPrompt({ patients, appointments, treatments, today }) {
   const unpaidCount = monthTreatments.filter(t => t.payment_status !== 'paid').length;
 
   // Overdue patients (no appointment in last 30 days)
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // FIX: localDateStr() — toISOString() would shift the cutoff one day earlier
+  // in Israel, wrongly including patients who were seen yesterday as "overdue".
+  const thirtyDaysAgo = localDateStr(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
   const recentPatientIds = new Set(
     appointments.filter(a => a.date >= thirtyDaysAgo).map(a => a.patient_id)
   );
@@ -72,7 +75,8 @@ function buildSystemPrompt({ patients, appointments, treatments, today }) {
     .join('\n') || '  (אין תורים היום)';
 
   // Upcoming 7 days
-  const in7 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // FIX: localDateStr() — same UTC-shift reason as thirtyDaysAgo above.
+  const in7 = localDateStr(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
   const upcomingCount = appointments.filter(
     a => a.date > today && a.date <= in7 && a.status === 'scheduled'
   ).length;
@@ -200,7 +204,10 @@ export default function AIAssistant() {
   const { user } = useAuth();
   const { patients, appointments, treatments, fetchAll, hasFetched } = useClinicData();
 
-  const today = new Date().toISOString().slice(0, 10);
+  // FIX: localDateStr() — timezone-safe. toISOString() shifts to yesterday before
+  // 02:00/03:00 AM local time in Israel, giving the AI wrong date context and
+  // causing "today's appointments" in the system prompt to show yesterday's list.
+  const today = localDateStr();
 
   const [messages, setMessages] = useState([
     {

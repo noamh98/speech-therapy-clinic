@@ -8,7 +8,7 @@ import { createTreatment, updateTreatment, getNextTreatmentNumber, getTreatment,
 // condition with two rapid writes to the same Firestore document.
 import { getTemplates } from '../../services/templates';
 import { uploadPatientFile } from '../../services/storage';
-import { PAYMENT_METHODS, PAYMENT_STATUSES } from '../../utils/formatters';
+import { PAYMENT_METHODS, PAYMENT_STATUSES, localDateStr } from '../../utils/formatters';
 import { Upload, Loader2, FileText, X, Trash2, CheckCircle2 } from 'lucide-react';
 
 /**
@@ -36,7 +36,11 @@ import { Upload, Loader2, FileText, X, Trash2, CheckCircle2 } from 'lucide-react
 export default function TreatmentDialog({ open, onClose, onSaved, appointment, patient, treatment, treatmentId, appointmentId }) {
   const { setTreatments, setPatients, setAppointments, fetchAll } = useClinicData();
   const [isEdit, setIsEdit] = useState(false);
-  const today = new Date().toISOString().slice(0, 10);
+  // FIX: localDateStr() instead of new Date().toISOString().slice(0,10).
+  // toISOString() converts to UTC — in Israel (UTC+2/+3) this returns yesterday's
+  // date for any local time before 02:00/03:00 AM, causing new treatments to be
+  // pre-filled with the wrong date. localDateStr() reads the local clock directly.
+  const today = localDateStr(new Date());
 
   // FIX: Single source of truth for the linked appointment ID
   const lockedAppointmentId = appointmentId || appointment?.id || null;

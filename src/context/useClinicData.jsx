@@ -13,6 +13,7 @@ import { getPatients } from '../services/patients';
 import { getAppointments } from '../services/appointments';
 import { getTreatments } from '../services/treatments';
 import { getPayments } from '../services/payments';
+import { localDateStr } from '../utils/formatters';
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 
@@ -42,14 +43,19 @@ export function ClinicDataProvider({ children }) {
 
     try {
       // Rolling window: 1 month back → 2 months forward
+      // FIX: Use localDateStr() instead of toISOString().slice(0,10).
+      // toISOString() converts to UTC — in Israel (UTC+2/+3) a Date set to local
+      // midnight becomes the *previous* day in UTC, shifting every window bound
+      // back by one day. localDateStr() reads getFullYear/getMonth/getDate which
+      // are always local-clock based.
       const now = new Date();
       const start = new Date(now);
       start.setMonth(start.getMonth() - 1);
       const end = new Date(now);
       end.setMonth(end.getMonth() + 2);
 
-      const startStr = start.toISOString().slice(0, 10);
-      const endStr   = end.toISOString().slice(0, 10);
+      const startStr = localDateStr(start);
+      const endStr   = localDateStr(end);
 
       const [p, a, t, pay] = await Promise.all([
         getPatients(),
@@ -94,7 +100,9 @@ export function ClinicDataProvider({ children }) {
   // verify that. The effect should only fire on uid change, not on every render.
 
   // ─── Derived helpers ──────────────────────────────────────────────────────────
-  const today = new Date().toISOString().slice(0, 10);
+  // FIX: localDateStr() — timezone-safe. toISOString() would return UTC date,
+  // which in Israel shifts to yesterday for any local time before 02:00/03:00.
+  const today = localDateStr(new Date());
 
   const patientMap = Object.fromEntries(patients.map(p => [p.id, p]));
 

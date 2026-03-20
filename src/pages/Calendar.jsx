@@ -270,16 +270,17 @@ export default function CalendarPage() {
       {/* ── Calendar Body ── */}
       <div className="flex-1 overflow-hidden relative">
         <AnimatePresence mode="wait">
-          {loading ? (
-            <div className="flex justify-center items-center h-full">
-              <Spinner size="lg" />
-            </div>
-          ) : (
-            <motion.div
-              key={view + cursor.toISOString().slice(0, 7)}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+  {loading ? (
+    <div className="flex justify-center items-center h-full">
+      <Spinner size="lg" />
+    </div>
+  ) : (
+    <motion.div
+      // FIX: Use localDateStr(cursor).slice(0,7) to avoid UTC offset issues
+      key={view + localDateStr(cursor).slice(0, 7)}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
               transition={{ duration: 0.15 }}
               className="h-full"
             >
