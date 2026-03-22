@@ -143,7 +143,10 @@ export default function Patients() {
   const handleRestore = async (id) => {
     try {
       await restorePatient(id);
-      load();
+      // Switch view to active list. The useEffect([user?.uid, showArchived])
+      // will fire automatically with showArchived=false and reload the active
+      // list — the restored patient will appear there and not in the archive.
+      setShowArchived(false);
     } catch (err) {
       setPageError(err.message || 'שגיאה בשחזור מטופל. נסה שוב.');
     }

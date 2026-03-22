@@ -1,148 +1,165 @@
 /**
- * useClinicData — Global data hook for SpeechCare (Multi-tenant version)
+ * useClinicData — Global data context for SpeechCare
  *
- * FIXES APPLIED:
- * 1. Added useEffect that calls fetchAll() automatically when a user logs in.
- *    Previously, data was never loaded on mount — every page got empty arrays
- *    until something manually called refresh().
+ * PERFORMANCE CONTRACT (strict):
+ *   - Fetches EXACTLY three collections: patients, appointments, treatments.
+ *   - Payments are NEVER fetched here. Any payment data needed by specific
+ *     components is fetched locally with targeted queries.
+ *   - All derived values (patientMap, treatmentsByApptId, docStatusMap,
+ *     todayAppointments, activePatients) are wrapped in useMemo so they
+ *     recompute only when their source arrays change — not on every render.
+ *
+ * What consumers get:
+ *   patients, appointments, treatments      — raw arrays
+ *   patientMap                              — { id → patient } for O(1) lookup
+ *   treatmentsByApptId                      — { appointmentId → treatment }
+ *   docStatusMap                            — { appointmentId → 'documented'|'needs_doc'|'cancelled'|'future' }
+ *   todayAppointments                       — pre-filtered scheduled appointments for today
+ *   activePatients                          — non-archived active patients
+ *   loading, error, hasFetched
+ *   refresh / fetchAll
+ *   setPatients, setAppointments, setTreatments  — for optimistic updates
  */
 
-import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import { getPatients } from '../services/patients';
 import { getAppointments } from '../services/appointments';
 import { getTreatments } from '../services/treatments';
-import { getPayments } from '../services/payments';
 import { localDateStr } from '../utils/formatters';
 
-// ─── Context ──────────────────────────────────────────────────────────────────
-
 const ClinicDataContext = createContext(null);
-
-// ─── Provider ─────────────────────────────────────────────────────────────────
 
 export function ClinicDataProvider({ children }) {
   const { user } = useAuth();
 
-  const [patients, setPatients] = useState([]);
+  const [patients,     setPatients]     = useState([]);
   const [appointments, setAppointments] = useState([]);
-  const [treatments, setTreatments] = useState([]);
-  // FIX: Added payments to global context so Dashboard and PatientProfile
-  // share the same data and update together after a payment is saved.
-  const [payments, setPayments] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [treatments,   setTreatments]   = useState([]);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState(null);
 
   const hasFetchedRef = useRef(false);
 
+  // ── Core fetch — 3 collections only ─────────────────────────────────────────
   const fetchAll = useCallback(async () => {
     if (!user?.uid) return;
-
     setLoading(true);
     setError(null);
-
     try {
-      // Rolling window: 1 month back → 2 months forward
-      // FIX: Use localDateStr() instead of toISOString().slice(0,10).
-      // toISOString() converts to UTC — in Israel (UTC+2/+3) a Date set to local
-      // midnight becomes the *previous* day in UTC, shifting every window bound
-      // back by one day. localDateStr() reads getFullYear/getMonth/getDate which
-      // are always local-clock based.
-      const now = new Date();
-      const start = new Date(now);
-      start.setMonth(start.getMonth() - 1);
-      const end = new Date(now);
-      end.setMonth(end.getMonth() + 2);
+      // Rolling window: 1 month back → 2 months forward (local dates, no UTC shift)
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - 1);
+      const endDate = new Date();
+      endDate.setMonth(endDate.getMonth() + 2);
 
-      const startStr = localDateStr(start);
-      const endStr   = localDateStr(end);
-
-      const [p, a, t, pay] = await Promise.all([
+      const [p, a, t] = await Promise.all([
         getPatients(),
-        getAppointments(startStr, endStr),
+        getAppointments(localDateStr(startDate), localDateStr(endDate)),
         getTreatments(),
-        // FIX: Fetch payments in parallel with everything else.
-        // Dashboard revenue and PatientProfile payment history now read from
-        // this shared state instead of making their own redundant Firestore calls.
-        getPayments(),
       ]);
 
       setPatients(p);
       setAppointments(a);
       setTreatments(t);
-      setPayments(pay);
       hasFetchedRef.current = true;
     } catch (err) {
-      console.error('useClinicData fetch error:', err);
+      console.error('[useClinicData] fetchAll error:', err);
       setError(err.message || 'שגיאה בטעינת נתונים');
     } finally {
       setLoading(false);
     }
   }, [user?.uid]);
 
-  // ─── FIX: Auto-fetch when user logs in ───────────────────────────────────────
-  // Previously this was never called automatically, so all pages started with
-  // empty arrays until something manually triggered refresh().
+  // Auto-fetch on login; clear on logout
   useEffect(() => {
     if (user?.uid) {
       fetchAll();
     } else {
-      // Clear data on logout
       setPatients([]);
       setAppointments([]);
       setTreatments([]);
-      setPayments([]);
       hasFetchedRef.current = false;
     }
   }, [user?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Note: fetchAll is intentionally omitted from deps here to avoid re-fetch
-  // loops. It is stable (useCallback with user?.uid dep), but ESLint can't
-  // verify that. The effect should only fire on uid change, not on every render.
 
-  // ─── Derived helpers ──────────────────────────────────────────────────────────
-  // FIX: localDateStr() — timezone-safe. toISOString() would return UTC date,
-  // which in Israel shifts to yesterday for any local time before 02:00/03:00.
-  const today = localDateStr(new Date());
+  // ── today — stable string, only changes at midnight ──────────────────────
+  // Memoised with [] so downstream memos don't invalidate on every render.
+  // (In practice today never changes during a session, but this is belt-and-suspenders.)
+  const today = useMemo(() => localDateStr(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const patientMap = Object.fromEntries(patients.map(p => [p.id, p]));
-
-  const todayAppointments = appointments.filter(
-    a => a.date === today && a.status === 'scheduled'
+  // ── patientMap — O(n) rebuild only when patients array reference changes ──
+  const patientMap = useMemo(
+    () => Object.fromEntries(patients.map(p => [p.id, p])),
+    [patients]
   );
 
-  const activePatients = patients.filter(p => p.status === 'active' && !p.is_archived);
+  // ── treatmentsByApptId — used by Calendar/Dashboard for doc status ────────
+  // Key: appointmentId, Value: treatment object.
+  // An appointment is "documented" iff it has an entry here.
+  const treatmentsByApptId = useMemo(
+    () => Object.fromEntries(
+      treatments
+        .filter(t => t.appointmentId)
+        .map(t => [t.appointmentId, t])
+    ),
+    [treatments]
+  );
 
-  // FIX: Pre-compute monthly payment stats here so Dashboard reads from context,
-  // not from a separate getPaymentStats() Firestore call. This means after any
-  // payment is saved and refresh() is called, Dashboard stats update immediately.
-  const thisMonth = today.slice(0, 7); // YYYY-MM
-  const monthPayments = payments.filter(p => (p.payment_date || '').startsWith(thisMonth));
-  const paymentStats = {
-    total_payments: monthPayments.length,
-    total_amount: monthPayments.reduce((s, p) => s + (p.amount || 0), 0),
-    completed_amount: monthPayments
-      .filter(p => p.payment_status === 'completed')
-      .reduce((s, p) => s + (p.amount || 0), 0),
-    pending_amount: monthPayments
-      .filter(p => p.payment_status === 'pending')
-      .reduce((s, p) => s + (p.amount || 0), 0),
-  };
+  // ── docStatusMap — per-appointment documentation status string ────────────
+  // Derived entirely from appointments + treatmentsByApptId (no payment data needed).
+  //
+  //   'documented'   — appointment has a linked treatment
+  //   'needs_doc'    — past/today appointment, no treatment, not cancelled
+  //   'cancelled'    — status is cancelled or missed
+  //   'future'       — appointment is in the future with no treatment yet
+  //
+  // Used by Calendar colour coding and the "show undocumented" filter.
+  const docStatusMap = useMemo(() => {
+    const map = {};
+    for (const a of appointments) {
+      const isDocumented       = Boolean(treatmentsByApptId[a.id]);
+      const isCancelledOrMissed = a.status === 'cancelled' || a.status === 'missed';
+      const isFuture           = a.date > today;
+
+      if (isCancelledOrMissed) {
+        map[a.id] = 'cancelled';
+      } else if (isDocumented) {
+        map[a.id] = 'documented';
+      } else if (isFuture) {
+        map[a.id] = 'future';
+      } else {
+        map[a.id] = 'needs_doc';
+      }
+    }
+    return map;
+  }, [appointments, treatmentsByApptId, today]);
+
+  // ── todayAppointments — pre-filtered for Dashboard widget ─────────────────
+  const todayAppointments = useMemo(
+    () => appointments.filter(a => a.date === today && a.status === 'scheduled'),
+    [appointments, today]
+  );
+
+  // ── activePatients — non-archived, active status ──────────────────────────
+  const activePatients = useMemo(
+    () => patients.filter(p => p.status === 'active' && !p.is_archived),
+    [patients]
+  );
 
   return (
     <ClinicDataContext.Provider value={{
-      // Raw data
+      // Raw arrays (3 collections only — NO payments)
       patients,
       appointments,
       treatments,
-      payments,
 
-      // Derived / pre-computed
+      // Derived (all memoised — zero cost on loading state changes)
       patientMap,
+      treatmentsByApptId,
+      docStatusMap,
       todayAppointments,
       activePatients,
-      // FIX: paymentStats computed from shared payments state — Dashboard reads
-      // this instead of making a separate getPaymentStats() Firestore call.
-      paymentStats,
 
       // State
       loading,
@@ -153,24 +170,18 @@ export function ClinicDataProvider({ children }) {
       refresh: fetchAll,
       fetchAll,
 
-      // Granular setters — let pages optimistically update local state
-      // without a full re-fetch (e.g. after creating a new appointment)
+      // Granular setters for optimistic UI updates without a full re-fetch
       setPatients,
       setAppointments,
       setTreatments,
-      setPayments,
     }}>
       {children}
     </ClinicDataContext.Provider>
   );
 }
 
-// ─── Hook ─────────────────────────────────────────────────────────────────────
-
 export function useClinicData() {
   const ctx = useContext(ClinicDataContext);
-  if (!ctx) {
-    throw new Error('useClinicData must be used inside <ClinicDataProvider>');
-  }
+  if (!ctx) throw new Error('useClinicData must be used inside <ClinicDataProvider>');
   return ctx;
 }

@@ -5,23 +5,9 @@ import {
   orderBy, writeBatch, increment
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
+import { localDateStr } from '../utils/formatters';
 
 const COLLECTION = 'patients';
-
-/**
- * localDateStr — timezone-safe YYYY-MM-DD string from the local clock.
- *
- * WHY: new Date().toISOString().slice(0,10) converts to UTC before formatting.
- * In Israel (UTC+2/+3), local midnight is 22:00/21:00 UTC the previous day,
- * so toISOString() returns yesterday's date for any local time before 02:00/03:00 AM.
- * This function reads getFullYear/getMonth/getDate — always local, never UTC.
- */
-function localDateStr(date = new Date()) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
 
 function requireAuth() {
   const user = auth.currentUser;
@@ -198,7 +184,7 @@ export async function deletePatient(patientId) {
     updated_date: serverTimestamp(),
   });
 
-  const today = localDateStr();
+  const today = localDateStr(); // timezone-safe local date
   const apptsSnap = await getDocs(
     query(
       collection(db, 'appointments'),
@@ -242,6 +228,8 @@ export async function restorePatient(patientId) {
   try {
     await updateDoc(doc(db, COLLECTION, patientId), {
       is_archived: false,
+      status: 'active',       // explicitly reset — filter checks both is_archived AND status
+      archived_date: null,   // clear the archive timestamp
       updated_date: serverTimestamp(),
     });
   } catch (error) {
