@@ -80,8 +80,11 @@ service cloud.firestore {
       allow update, delete: if canAccessRecord();
     }
 
-    // Patient portal access – patients can read their own data
-    // (implement with a separate auth mechanism if needed)
-    // For now, portal access is handled client-side by checking portal_access_enabled
+    // Payments collection — was missing, causing "insufficient permissions" errors
+    match /payments/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update, delete: if canAccessRecord();
+    }
   }
 }
