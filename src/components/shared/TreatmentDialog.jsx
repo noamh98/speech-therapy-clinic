@@ -1,6 +1,6 @@
 // src/components/shared/TreatmentDialog.jsx
 /**
- * WHAT'S NEW vs BASELINE:
+ * FEATURES:
  *
  * 1. Quick note templates (טיפול שגרתי / הערכה / הדרכת הורים)
  *    Three buttons above the goals field. Clicking one pre-fills goals +
@@ -8,8 +8,8 @@
  *
  * 2. "Copy from previous session" button
  *    Appears when editing or creating for a patient who has prior treatments.
- *    Fetches the most recent treatment via getPatientTreatments (already
- *    available in services). Shows a preview and copies on confirmation.
+ *    Fetches the most recent treatment via getPatientTreatments.
+ *    Shows a preview and copies on confirmation.
  *
  * 3. Structured clinical fields (all optional, backward-compatible)
  *    clinicalDomain, cooperationLevel, progressRating — quick selects below
@@ -20,14 +20,14 @@
  *    getPaymentsByTreatment(treatmentId) call. If a payment is found, the
  *    "create payment" checkbox is replaced by a read-only summary + "Edit"
  *    button (opens PaymentModal). This prevents duplicate payment creation.
- *    No payments are loaded into global context.
  *
  * 5. localDateStr() replaces toISOString().slice(0,10) for the today default.
  *
- * PERFORMANCE: No changes to useClinicData. The two new network calls
- * (getPaymentsByTreatment, getPatientTreatments for copy-prev) fire only
- * when the dialog opens for an existing treatment — a rare, user-initiated
- * action, not a background load.
+ * 6. CASCADING DELETE (fixed)
+ *    handleDelete now calls the updated deleteTreatment() which atomically
+ *    removes the treatment + all linked payments + unlinks the appointment.
+ *    Then calls fetchAll() so Dashboard KPIs, Calendar, and Patient card
+ *    all update immediately without a manual browser refresh.
  */
 
 import { useState, useEffect } from 'react';
@@ -55,7 +55,7 @@ export default function TreatmentDialog({
   const { setTreatments, setPatients, fetchAll } = useClinicData();
   const [isEdit, setIsEdit] = useState(false);
 
-  const today = localDateStr(); // timezone-safe
+  const today = localDateStr(); // timezone-safe — never toISOString()
 
   const lockedAppointmentId = appointmentId || appointment?.id || null;
 
@@ -70,7 +70,6 @@ export default function TreatmentDialog({
     createPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNotes: '',
   });
 
-  // ── Loading states ───────────────────────────────────────────────────────
   const [templates,           setTemplates]           = useState([]);
   const [filesToUpload,       setFilesToUpload]       = useState([]);
   const [uploadProgress,      setUploadProgress]      = useState({});
@@ -78,16 +77,16 @@ export default function TreatmentDialog({
   const [initialFetchLoading, setInitialFetchLoading] = useState(false);
   const [error,               setError]               = useState('');
 
-  // ── 1:1 Payment guard state ──────────────────────────────────────────────
-  const [existingPayment,   setExistingPayment]   = useState(null);
-  const [paymentModalOpen,  setPaymentModalOpen]  = useState(false);
+  // ── 1:1 Payment guard ────────────────────────────────────────────────────
+  const [existingPayment,  setExistingPayment]  = useState(null);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
 
-  // ── Copy-previous state ──────────────────────────────────────────────────
-  const [prevTreatments,    setPrevTreatments]    = useState([]);
-  const [pendingCopyFrom,   setPendingCopyFrom]   = useState(null); // treatment to copy from
+  // ── Copy-previous ────────────────────────────────────────────────────────
+  const [prevTreatments,  setPrevTreatments]  = useState([]);
+  const [pendingCopyFrom, setPendingCopyFrom] = useState(null);
 
-  // ── Template overwrite confirmation ─────────────────────────────────────
-  const [pendingTemplate,   setPendingTemplate]   = useState(null);
+  // ── Template overwrite confirmation ──────────────────────────────────────
+  const [pendingTemplate, setPendingTemplate] = useState(null);
 
   // ── Effects ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -106,7 +105,7 @@ export default function TreatmentDialog({
 
     if (effectiveTreatmentId) {
       fetchAndFillTreatment(effectiveTreatmentId);
-      // 1:1 check: load existing payment for this treatment
+      // 1:1 check: load existing payment for this treatment (single targeted query)
       getPaymentsByTreatment(effectiveTreatmentId)
         .then(pmts => { if (pmts?.length > 0) setExistingPayment(pmts[0]); })
         .catch(() => {}); // non-fatal
@@ -192,9 +191,9 @@ export default function TreatmentDialog({
     setPendingCopyFrom(null);
     setForm(f => ({
       ...f,
-      goals:          prevForCopy.goals       || f.goals,
-      description:    prevForCopy.description || f.description,
-      progress:       prevForCopy.progress    || f.progress,
+      goals:          prevForCopy.goals          || f.goals,
+      description:    prevForCopy.description    || f.description,
+      progress:       prevForCopy.progress       || f.progress,
       clinicalDomain: prevForCopy.clinicalDomain || f.clinicalDomain,
     }));
   };
@@ -206,25 +205,34 @@ export default function TreatmentDialog({
   const removeFileFromQueue = (idx) =>
     setFilesToUpload(prev => prev.filter((_, i) => i !== idx));
 
-  // ── Delete treatment ──────────────────────────────────────────────────────
+  // ── Delete treatment — CASCADING ──────────────────────────────────────────
+  // Calls the updated deleteTreatment() which atomically removes:
+  //   • The treatment document
+  //   • All linked payment documents
+  //   • Unlinks + resets the parent appointment to 'scheduled'
+  // Then fetchAll() refreshes context so Dashboard/Calendar update immediately.
   const handleDelete = async () => {
     const id = currentTreatmentId || form.id;
-    if (!id || !window.confirm('האם אתה בטוח שברצונך למחוק את תיעוד הטיפול?')) return;
+    if (!id || !window.confirm(
+      'האם אתה בטוח שברצונך למחוק את תיעוד הטיפול?\n\nפעולה זו תסיר את הטיפול, התשלומים המקושרים, ותחזיר את התור ליומן.'
+    )) return;
+
     setLoading(true);
     try {
       await deleteTreatment(id, patient?.id);
-      setTreatments(prev => prev.filter(t => t.id !== id));
-      if (patient?.id) {
-        setPatients(prev => prev.map(p =>
-          p.id === patient.id
-            ? { ...p, treatment_count: Math.max(0, (p.treatment_count || 1) - 1) }
-            : p
-        ));
-      }
-      onSaved(); onClose();
+
+      // Full context refresh — Dashboard KPIs, Calendar colours, and Patient
+      // card all update in this render cycle, no browser refresh needed.
+      if (fetchAll) await fetchAll();
+
+      onSaved();
+      onClose();
     } catch (err) {
-      setError('שגיאה במחיקת הטיפול');
-    } finally { setLoading(false); }
+      console.error('[TreatmentDialog] Delete error:', err);
+      setError('שגיאה במחיקת הטיפול: ' + (err.message || 'נסה שוב'));
+    } finally {
+      setLoading(false);
+    }
   };
 
   // ── Submit ────────────────────────────────────────────────────────────────
@@ -234,7 +242,7 @@ export default function TreatmentDialog({
     setError('');
     setLoading(true);
     try {
-      // Upload files
+      // Upload new files first
       const newFiles = [];
       for (const file of filesToUpload) {
         const uploaded = await uploadPatientFile(patient.id, file, pct =>
@@ -255,7 +263,7 @@ export default function TreatmentDialog({
         patient_id:       patient.id,
         patient_name:     patient.full_name,
         appointmentId:    finalAppointmentId,
-        // Structured clinical fields (null when blank)
+        // Structured clinical fields (null when blank — backward-compatible)
         clinicalDomain:   form.clinicalDomain   || null,
         cooperationLevel: form.cooperationLevel ? Number(form.cooperationLevel) : null,
         progressRating:   form.progressRating   || null,
@@ -279,17 +287,23 @@ export default function TreatmentDialog({
         setTreatments(prev => [savedTreatment, ...prev]);
       }
 
-      // Link appointment
+      // Link appointment to treatment
       if (finalAppointmentId && savedTreatmentId) {
         try { await linkAppointmentToTreatment(finalAppointmentId, savedTreatmentId); }
         catch { /* non-fatal */ }
       }
 
+      // Full refresh so all derived data (docStatusMap, patient count, etc.) updates
       if (fetchAll) await fetchAll();
-      onSaved(); onClose();
+
+      onSaved();
+      onClose();
     } catch (err) {
+      console.error('[TreatmentDialog] Submit error:', err);
       setError('שגיאה בשמירה: ' + (err.message || 'נסה שוב'));
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const set    = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
@@ -310,7 +324,7 @@ export default function TreatmentDialog({
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
 
-            {/* Patient header */}
+            {/* Patient header + delete */}
             <div className="bg-teal-50 rounded-xl p-3 border border-teal-100 flex justify-between items-center">
               <p className="text-sm font-bold text-teal-800">מטופל/ת: {patient?.full_name || '—'}</p>
               {isEdit && (
@@ -321,7 +335,7 @@ export default function TreatmentDialog({
               )}
             </div>
 
-            {/* Date + number */}
+            {/* Date + treatment number */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">תאריך *</label>
@@ -398,7 +412,9 @@ export default function TreatmentDialog({
                   <select className="input" value={form.cooperationLevel} onChange={set('cooperationLevel')}>
                     <option value="">— בחר —</option>
                     {COOPERATION_LEVELS.map(c => (
-                      <option key={c.value} value={c.value}>{c.value} — {c.label.split(' — ')[1]}</option>
+                      <option key={c.value} value={c.value}>
+                        {c.value} — {c.label.split(' — ')[1]}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -416,7 +432,7 @@ export default function TreatmentDialog({
             {/* ── Payment section — 1:1 guard ── */}
             <div className="border-t-2 border-teal-100 pt-4">
               {existingPayment ? (
-                // Existing payment found → show it, block new creation
+                // Existing payment found → show summary, block new creation
                 <div className="p-3 bg-green-50 rounded-lg border border-green-200">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-bold text-green-800">תשלום קיים לטיפול זה</span>
@@ -486,7 +502,7 @@ export default function TreatmentDialog({
               )}
             </div>
 
-            {/* Existing files */}
+            {/* Existing attached files */}
             {form.files?.length > 0 && (
               <div className="space-y-2">
                 <label className="block text-xs font-bold text-gray-400 uppercase">קבצים מצורפים:</label>
@@ -581,14 +597,14 @@ export default function TreatmentDialog({
         </Modal>
       )}
 
-      {/* Edit existing payment */}
+      {/* Edit existing payment (1:1 guard) */}
       {paymentModalOpen && existingPayment && (
         <PaymentModal
           isOpen={paymentModalOpen}
           onClose={() => setPaymentModalOpen(false)}
           onSave={() => {
             setPaymentModalOpen(false);
-            // Refresh the local existingPayment display
+            // Re-fetch to refresh the payment summary display
             if (currentTreatmentId) {
               getPaymentsByTreatment(currentTreatmentId)
                 .then(pmts => { if (pmts?.length > 0) setExistingPayment(pmts[0]); })
