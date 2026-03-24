@@ -1,25 +1,49 @@
 // src/pages/Patients.jsx
+/**
+ * FIXES IN THIS VERSION:
+ *
+ * FIX 1 — DUAL FIELD PAYMENT FILTER:
+ *   setPayments() filter was only checking patientId (camelCase).
+ *   Payments created by older code stored ONLY patient_id (snake_case).
+ *   Those payments survived the filter and remained in context, keeping
+ *   the Dashboard income inflated after archiving.
+ *   FIX: Filter now checks BOTH p.patientId AND p.patient_id.
+ *
+ * FIX 2 — UTC DATE BUG IN APPOINTMENT FILTER:
+ *   setAppointments used new Date().toISOString().split('T')[0] for today,
+ *   which returns UTC date — in Israel this shifts to yesterday before 02:00 AM.
+ *   FIX: Use localDateStr() from formatters.
+ *
+ * FIX 3 — handleSave MISSING CONTEXT SYNC:
+ *   After creating/updating a patient, only the local list was refreshed.
+ *   The global context (used by Dashboard patient count) was never updated.
+ *   FIX: Call fetchAll() in the background after every save.
+ *
+ * FIX 4 — handleRestore NOW CALLS fetchAll:
+ *   restorePatient() un-archives treatments + payments in Firestore, but
+ *   the context still had empty arrays for them (they were removed on archive).
+ *   FIX: fetchAll() after restore brings everything back into context.
+ */
+
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useClinicData } from '../context/useClinicData';
 import { useAuth } from '../context/AuthContext';
-import { 
-  getPatients, 
-  createPatient, 
-  updatePatient, 
-  deletePatient, 
+import {
+  getPatients,
+  createPatient,
+  updatePatient,
+  deletePatient,
   validateIsraeliId,
-  restorePatient
+  restorePatient,
 } from '../services/patients';
-// NOTE: getPatientTreatmentCount removed — treatment_count is now a
-// denormalized field on each patient document (set by createPatient).
-// This eliminates the N+1 pattern: 30 patients = 1 query, not 31.
 import { PageHeader, EmptyState, Modal, ConfirmDialog, Spinner, Badge } from '../components/ui';
-import { 
-  Users, Plus, Search, Pencil, Archive, ChevronLeft, 
-  Phone, UserCheck, AlertCircle
+import {
+  Users, Plus, Search, Pencil, Archive, ChevronLeft,
+  Phone, UserCheck, AlertCircle,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { PATIENT_STATUSES } from '../utils/formatters';
+import { PATIENT_STATUSES, localDateStr } from '../utils/formatters';
 
 const EMPTY_FORM = {
   full_name: '', id_number: '', phone: '', email: '', birth_date: '',
@@ -32,53 +56,40 @@ const EMPTY_FORM = {
 export default function Patients() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [patients, setPatients] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [showArchived, setShowArchived] = useState(false); // מצב תצוגת ארכיון
-  const [formOpen, setFormOpen] = useState(false);
-  const [editPatient, setEditPatient] = useState(null);
-  const [deleteTarget, setDeleteTarget] = useState(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [errors, setErrors] = useState({});
-  const [saving, setSaving] = useState(false);
-  const [pageError, setPageError] = useState('');
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // MULTI-TENANCY: Load patients only when user is fully authenticated
-  // ═══════════════════════════════════════════════════════════════════════════
+  // Global context setters — used to sync all views after mutations
+  const {
+    setPatients: setContextPatients,
+    setTreatments,
+    setPayments,
+    setAppointments,
+    fetchAll,
+  } = useClinicData();
+
+  const [patients,      setPatients]      = useState([]);
+  const [loading,       setLoading]       = useState(true);
+  const [search,        setSearch]        = useState('');
+  const [statusFilter,  setStatusFilter]  = useState('all');
+  const [showArchived,  setShowArchived]  = useState(false);
+  const [formOpen,      setFormOpen]      = useState(false);
+  const [editPatient,   setEditPatient]   = useState(null);
+  const [deleteTarget,  setDeleteTarget]  = useState(null);
+  const [form,          setForm]          = useState(EMPTY_FORM);
+  const [errors,        setErrors]        = useState({});
+  const [saving,        setSaving]        = useState(false);
+  const [pageError,     setPageError]     = useState('');
+
   useEffect(() => {
-    // CRITICAL: Wait for user.uid to be available, not just user.email
-    // user.uid is required by the service's ownerId filtering
-    if (!user?.uid) {
-      console.log('[Patients] Waiting for auth to be ready...');
-      setLoading(true);
-      return;
-    }
-
+    if (!user?.uid) { setLoading(true); return; }
     load();
-  }, [user?.uid, showArchived]); // Depend on user.uid, not user.email
+  }, [user?.uid, showArchived]);
 
   async function load() {
     setLoading(true);
     setPageError('');
-
     try {
-      // CRITICAL FIX: Call getPatients with ONLY the includeArchived parameter
-      // The service now handles ownerId filtering internally
-      // Do NOT pass user.email — it was causing the parameter to be misinterpreted
       const p = await getPatients(showArchived);
-      
-      console.log(`[Patients] Loaded ${p.length} patients (showArchived=${showArchived})`);
-      
-      // SECURITY: Verify all returned patients belong to current user
       const userPatients = p.filter(pat => pat.ownerId === user.uid);
-      
-      if (userPatients.length !== p.length) {
-        console.warn(`[Patients] Security: Filtered ${p.length - userPatients.length} cross-tenant records`);
-      }
-      
       setPatients(userPatients);
     } catch (err) {
       console.error('[Patients] Load error:', err);
@@ -89,8 +100,6 @@ export default function Patients() {
     }
   }
 
-  // useMemo: filtered list only recomputes when patients/search/statusFilter change,
-  // not on every render (e.g. when a modal opens).
   const filtered = useMemo(() => patients.filter(p => {
     const matchSearch = !search ||
       p.full_name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -99,7 +108,7 @@ export default function Patients() {
     return matchSearch && matchStatus;
   }), [patients, search, statusFilter]);
 
-  const openAdd = () => { setEditPatient(null); setForm(EMPTY_FORM); setErrors({}); setFormOpen(true); };
+  const openAdd  = () => { setEditPatient(null); setForm(EMPTY_FORM); setErrors({}); setFormOpen(true); };
   const openEdit = (pt) => { setEditPatient(pt); setForm({ ...EMPTY_FORM, ...pt }); setErrors({}); setFormOpen(true); };
 
   const validate = () => {
@@ -110,6 +119,7 @@ export default function Patients() {
     return Object.keys(e).length === 0;
   };
 
+  // FIX 3: sync global context after every save
   const handleSave = async (e) => {
     e.preventDefault();
     if (!validate()) return;
@@ -117,52 +127,91 @@ export default function Patients() {
     try {
       if (editPatient) {
         await updatePatient(editPatient.id, form);
+        // Optimistic update in context
+        setContextPatients(prev => prev.map(p =>
+          p.id === editPatient.id ? { ...p, ...form } : p
+        ));
       } else {
         await createPatient(form);
       }
       setFormOpen(false);
-      load();
+      await load();
+      // Background sync — updates Dashboard patient count, etc.
+      fetchAll().catch(err => console.warn('[Patients] fetchAll after save:', err));
     } catch (err) {
       setErrors({ _: err.message });
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   };
 
+  // FIX 1 + FIX 2: correct dual-field filter and timezone-safe date
   const handleDelete = async () => {
+    if (!deleteTarget) return;
     try {
       await deletePatient(deleteTarget.id);
       setDeleteTarget(null);
-      load();
+
+      // ── Local list update ──────────────────────────────────────────────
+      setPatients(prev => prev.filter(p => p.id !== deleteTarget.id));
+
+      // ── Global context sync ────────────────────────────────────────────
+      // Remove the patient
+      setContextPatients(prev => prev.filter(p => p.id !== deleteTarget.id));
+
+      // Remove their treatments
+      setTreatments(prev => prev.filter(t => t.patient_id !== deleteTarget.id));
+
+      // FIX 1: check BOTH patientId (camelCase) AND patient_id (snake_case)
+      // Older payment records may only have patient_id stored.
+      setPayments(prev => prev.filter(p =>
+        p.patientId  !== deleteTarget.id &&
+        p.patient_id !== deleteTarget.id
+      ));
+
+      // FIX 2: use localDateStr() — not toISOString() which returns UTC date
+      const todayStr = localDateStr();
+      setAppointments(prev => prev.filter(a =>
+        !(a.patient_id === deleteTarget.id &&
+          a.status === 'scheduled' &&
+          a.date >= todayStr)
+      ));
+
+      // Background reconcile — ensures paymentStats recomputes in useClinicData
+      fetchAll().catch(err => console.warn('[Patients] fetchAll after delete:', err));
+
     } catch (err) {
-      // FIX: replaced alert() with inline error — alert() blocks the UI thread
-      // and looks broken on mobile.
       setPageError(err.message || 'שגיאה בהעברה לארכיון. נסה שוב.');
       setDeleteTarget(null);
     }
   };
 
+  // FIX 4: fetchAll after restore brings treatments + payments back into context
   const handleRestore = async (id) => {
     try {
       await restorePatient(id);
-      // Switch view to active list. The useEffect([user?.uid, showArchived])
-      // will fire automatically with showArchived=false and reload the active
-      // list — the restored patient will appear there and not in the archive.
       setShowArchived(false);
+      // fetchAll re-fetches everything including restored treatments + payments
+      await fetchAll();
     } catch (err) {
       setPageError(err.message || 'שגיאה בשחזור מטופל. נסה שוב.');
     }
   };
 
-  const set = k => e => setForm(f => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+  const set = k => e => setForm(f => ({
+    ...f,
+    [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value,
+  }));
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title={showArchived ? "ארכיון מטופלים" : "מטופלים"}
-        subtitle={showArchived ? "מטופלים שהועברו לארכיון" : `${patients.length} מטופלים פעילים`}
+        title={showArchived ? 'ארכיון מטופלים' : 'מטופלים'}
+        subtitle={showArchived ? 'מטופלים שהועברו לארכיון' : `${patients.length} מטופלים פעילים`}
         actions={
           <div className="flex gap-2">
-            <button 
-              onClick={() => setShowArchived(!showArchived)} 
+            <button
+              onClick={() => setShowArchived(!showArchived)}
               className={`btn-secondary flex items-center gap-2 ${showArchived ? 'bg-teal-50 border-teal-200 text-teal-700' : ''}`}
             >
               {showArchived ? <Users className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
@@ -170,8 +219,7 @@ export default function Patients() {
             </button>
             {!showArchived && (
               <button onClick={openAdd} className="btn-primary flex items-center gap-2">
-                <Plus className="w-4 h-4" />
-                מטופל חדש
+                <Plus className="w-4 h-4" /> מטופל חדש
               </button>
             )}
           </div>
@@ -198,7 +246,7 @@ export default function Patients() {
         )}
       </div>
 
-      {/* Inline error banner - replaces alert() calls throughout this page */}
+      {/* Inline error */}
       {pageError && (
         <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-red-700 text-sm">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -210,13 +258,11 @@ export default function Patients() {
       {loading ? (
         <div className="flex justify-center py-12"><Spinner size="lg" /></div>
       ) : filtered.length === 0 ? (
-        <EmptyState 
-          icon={showArchived ? Archive : Users} 
-          title={showArchived ? "הארכיון ריק" : "אין מטופלים"} 
-          description={showArchived ? "" : "הוסף מטופל חדש כדי להתחיל"} 
-          action={!showArchived && (
-            <button onClick={openAdd} className="btn-primary">הוסף מטופל</button>
-          )} 
+        <EmptyState
+          icon={showArchived ? Archive : Users}
+          title={showArchived ? 'הארכיון ריק' : 'אין מטופלים'}
+          description={showArchived ? '' : 'הוסף מטופל חדש כדי להתחיל'}
+          action={!showArchived && <button onClick={openAdd} className="btn-primary">הוסף מטופל</button>}
         />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -234,7 +280,7 @@ export default function Patients() {
         </div>
       )}
 
-      {/* Form Modal (נשאר ללא שינוי מהקוד המקורי שלך) */}
+      {/* Form Modal */}
       <Modal
         open={formOpen}
         onClose={() => setFormOpen(false)}
@@ -334,6 +380,7 @@ export default function Patients() {
   );
 }
 
+// ─── Patient Card ─────────────────────────────────────────────────────────────
 function PatientCard({ patient, onEdit, onDelete, onRestore, onNavigate, isArchivedView }) {
   return (
     <motion.div
@@ -357,11 +404,11 @@ function PatientCard({ patient, onEdit, onDelete, onRestore, onNavigate, isArchi
             </div>
           </div>
         </div>
+
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all" onClick={e => e.stopPropagation()}>
           <button onClick={onEdit} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-700">
             <Pencil className="w-3.5 h-3.5" />
           </button>
-          
           {isArchivedView ? (
             <button onClick={onRestore} className="p-1.5 hover:bg-green-50 rounded-lg text-gray-400 hover:text-green-600" title="שחזר">
               <UserCheck className="w-3.5 h-3.5" />

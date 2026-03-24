@@ -76,6 +76,10 @@ export async function getTreatment(id) {
 /**
  * getPatientTreatments — fetch all treatments for a specific patient.
  */
+/**
+ * getPatientTreatments — fetch all treatments for a specific patient.
+ * מסנן אוטומטית טיפולים שנמצאים בארכיון.
+ */
 export async function getPatientTreatments(patientId) {
   const user = requireAuth();
   
@@ -83,30 +87,17 @@ export async function getPatientTreatments(patientId) {
     const q = query(
       collection(db, COLLECTION),
       where('ownerId', '==', user.uid),
-      where('patient_id', '==', patientId),
-      orderBy('treatment_number', 'desc')
+      where('patient_id', '==', patientId)
     );
     const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      // סינון צד-לקוח: מציג רק טיפולים שלא בארכיון
+      .filter(t => t.is_archived !== true)
+      .sort((a, b) => (b.treatment_number || 0) - (a.treatment_number || 0));
   } catch (error) {
-    // Fallback for missing indexes
-    if (error.code === 'failed-precondition') {
-      console.warn('[treatments.js] Missing Firestore index, using client-side filter');
-      try {
-        const q = query(
-          collection(db, COLLECTION),
-          where('ownerId', '==', user.uid),
-          where('patient_id', '==', patientId)
-        );
-        const snap = await getDocs(q);
-        return snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (b.treatment_number || 0) - (a.treatment_number || 0));
-      } catch (fallbackErr) {
-        console.error('[treatments.js] Fallback query failed:', fallbackErr);
-        throw fallbackErr;
-      }
-    }
+    console.error('[treatments.js] Error fetching patient treatments:', error);
     throw error;
   }
 }
@@ -114,35 +105,26 @@ export async function getPatientTreatments(patientId) {
 /**
  * getTreatments — fetch all treatments for the current user.
  */
+/**
+ * getTreatments — fetch all active treatments for the current user.
+ */
 export async function getTreatments() {
   const user = requireAuth();
   
   try {
     const q = query(
       collection(db, COLLECTION),
-      where('ownerId', '==', user.uid),
-      orderBy('date', 'desc')
+      where('ownerId', '==', user.uid)
     );
     const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      // סינון צד-לקוח למניעת צורך באינדקסים מורכבים
+      .filter(t => t.is_archived !== true)
+      .sort((a, b) => b.date.localeCompare(a.date));
   } catch (error) {
-    // Fallback for missing indexes
-    if (error.code === 'failed-precondition') {
-      console.warn('[treatments.js] Missing Firestore index, using client-side filter');
-      try {
-        const q = query(
-          collection(db, COLLECTION),
-          where('ownerId', '==', user.uid)
-        );
-        const snap = await getDocs(q);
-        return snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => b.date.localeCompare(a.date));
-      } catch (fallbackErr) {
-        console.error('[treatments.js] Fallback query failed:', fallbackErr);
-        throw fallbackErr;
-      }
-    }
+    console.error('[treatments.js] Error fetching all treatments:', error);
     throw error;
   }
 }
@@ -360,112 +342,139 @@ async function syncFileToPatient(patientId, fileInfo) {
 }
 
 /**
- * deleteTreatment — CASCADING DELETE
+ * deleteTreatment — Atomic cascade delete.
  *
- * Atomically removes:
- *   1. The treatment document itself.
- *   2. All payments linked to this treatment (treatmentId == id).
- *   3. Unlinks the parent appointment: sets treatmentId→null, status→'scheduled'.
- *      The appointment slot is preserved on the calendar — only the documentation
- *      link and "completed" status are removed.
+ * WHAT THIS DOES IN A SINGLE BATCH:
+ * 1. Deletes the treatment document itself.
+ * 2. Deletes ALL payments linked to this treatment (treatmentId field).
+ * 3. Resets the linked appointment back to 'scheduled' and clears treatmentId.
  *
- * After the batch write, decrements patient.treatment_count by 1.
- * (incrementTreatmentCount uses a separate atomic increment so it cannot be
- * included in the same batch without converting to a transaction — keeping it
- * separate is safe because it's the last step and non-fatal if it fails.)
+ * WHY BATCH:
+ * Three separate writes risk leaving orphan data if the network drops mid-way.
+ * writeBatch is all-or-nothing — either every write commits or none do.
  *
- * @param {string} id         Treatment document ID
- * @param {string} patientId  Patient document ID (required for count decrement)
- * @returns {object}  { deletedPayments, unlinkedAppointmentId }
+ * WHY NOT DELETE THE APPOINTMENT:
+ * The appointment represents a real event in the therapist's calendar.
+ * Deleting the treatment documentation should NOT erase the fact that the
+ * patient showed up. We reset it to 'scheduled' so it can be re-documented.
+ *
+ * @param {string} treatmentId   - Firestore document ID of the treatment
+ * @param {string} patientId     - Used to decrement treatment_count on the patient
+ * @returns {Promise<{
+ *   deletedPaymentsCount: number,
+ *   appointmentReset: boolean
+ * }>} - Summary of what was cleaned up
  */
-export async function deleteTreatment(id, patientId) {
-  if (!id) throw new Error('Treatment ID is required');
+export async function deleteTreatment(treatmentId, patientId) {
   const user = requireAuth();
 
-  // ── Step 1: Read the treatment (verify ownership + get linked IDs) ──────────
-  const treatmentRef = doc(db, COLLECTION, id);
+  if (!treatmentId) throw new Error('Treatment ID is required');
+
+  // ─── Step 1: Verify ownership ────────────────────────────────────────────
+  const treatmentRef = doc(db, COLLECTION, treatmentId);
   const treatmentSnap = await getDoc(treatmentRef);
 
   if (!treatmentSnap.exists()) {
     throw new Error('Treatment not found');
   }
-  const treatmentData = treatmentSnap.data();
-  if (treatmentData.ownerId !== user.uid) {
+  if (treatmentSnap.data().ownerId !== user.uid) {
     throw new Error('Access denied: treatment does not belong to you');
   }
 
+  const treatmentData = treatmentSnap.data();
   const linkedAppointmentId = treatmentData.appointmentId || null;
 
-  // ── Step 2: Find all payments linked to this treatment ────────────────────
-  // Cannot batch-query then batch-delete in a single batch because reads must
-  // precede writes; we query first, then include deletions in the batch.
-  let paymentDocs = [];
+  // ─── Step 2: Find all payments linked to this treatment ──────────────────
+  // We query by treatmentId (camelCase) — the primary field in payments.js.
+  // No need to also query by snake_case: payments.js stores both conventions
+  // but links via treatmentId (camelCase) as the canonical join key.
+  let linkedPayments = [];
   try {
     const paymentsQuery = query(
       collection(db, 'payments'),
-      where('ownerId',     '==', user.uid),
-      where('treatmentId', '==', id)
+      where('ownerId', '==', user.uid),
+      where('treatmentId', '==', treatmentId)
     );
     const paymentsSnap = await getDocs(paymentsQuery);
-    paymentDocs = paymentsSnap.docs;
+    linkedPayments = paymentsSnap.docs;
   } catch (err) {
-    // Fallback: missing index — try without ownerId filter then filter client-side
-    console.warn('[treatments.js] Payment index missing, falling back:', err.message);
+    // Non-fatal: log and continue. We'll still delete the treatment.
+    // A manual cleanup can handle stale payments if this query fails.
+    console.warn('[treatments.js] Could not fetch linked payments for cleanup:', err);
+  }
+
+  // ─── Step 3: Find the linked appointment (if any) ────────────────────────
+  let appointmentRef = null;
+  let appointmentSnap = null;
+
+  if (linkedAppointmentId) {
     try {
-      const fallbackQuery = query(
-        collection(db, 'payments'),
-        where('treatmentId', '==', id)
-      );
-      const fallbackSnap = await getDocs(fallbackQuery);
-      paymentDocs = fallbackSnap.docs.filter(d => d.data().ownerId === user.uid);
-    } catch (fallbackErr) {
-      console.warn('[treatments.js] Payment fallback also failed — payments may be orphaned:', fallbackErr.message);
-      paymentDocs = [];
+      appointmentRef = doc(db, 'appointments', linkedAppointmentId);
+      appointmentSnap = await getDoc(appointmentRef);
+
+      // Only reset if it still exists AND belongs to this user
+      if (!appointmentSnap.exists() || appointmentSnap.data().ownerId !== user.uid) {
+        console.warn('[treatments.js] Linked appointment not found or access denied — skipping reset');
+        appointmentRef = null;
+        appointmentSnap = null;
+      }
+    } catch (err) {
+      console.warn('[treatments.js] Could not fetch linked appointment:', err);
+      appointmentRef = null;
     }
   }
 
-  // ── Step 3: Build and commit the batch ───────────────────────────────────
-  // Max 500 ops per batch; a treatment won't realistically have >490 payments,
-  // but guard anyway.
+  // ─── Step 4: Build and commit the atomic batch ───────────────────────────
+  // Firestore batches support up to 500 operations.
+  // Realistic max here: 1 treatment + ~20 payments + 1 appointment = well within limit.
   const batch = writeBatch(db);
 
-  // 3a. Delete the treatment
+  // 4a. Delete the treatment
   batch.delete(treatmentRef);
 
-  // 3b. Delete every linked payment
-  for (const payDoc of paymentDocs) {
-    batch.delete(payDoc.ref);
+  // 4b. Delete all linked payments
+  for (const paymentDoc of linkedPayments) {
+    batch.delete(paymentDoc.ref);
   }
 
-  // 3c. Unlink the parent appointment (reset treatmentId + status)
-  if (linkedAppointmentId) {
-    const apptRef = doc(db, 'appointments', linkedAppointmentId);
-    const apptSnap = await getDoc(apptRef);
-    // Only update if it still exists and belongs to this user
-    if (apptSnap.exists() && apptSnap.data().ownerId === user.uid) {
-      batch.update(apptRef, {
-        treatmentId:  null,
-        status:       'scheduled',
-        updated_date: serverTimestamp(),
-      });
-    }
+  // 4c. Reset the linked appointment → back to 'scheduled', clear treatmentId
+  if (appointmentRef) {
+    batch.update(appointmentRef, {
+      status: 'scheduled',
+      treatmentId: null,        // camelCase — matches appointments.js schema
+      updated_date: serverTimestamp(),
+    });
   }
 
-  await batch.commit();
-  console.log(
-    `[treatments.js] Cascade-deleted treatment ${id}:`,
-    `${paymentDocs.length} payment(s) removed,`,
-    linkedAppointmentId ? `appointment ${linkedAppointmentId} unlinked` : 'no linked appointment'
-  );
+  try {
+    await batch.commit();
+    console.log(
+      `[treatments.js] Deleted treatment ${treatmentId}: ` +
+      `${linkedPayments.length} payments removed, ` +
+      `appointment ${linkedAppointmentId ? 'reset' : 'N/A'}`
+    );
+  } catch (err) {
+    console.error('[treatments.js] Batch delete failed — nothing was deleted:', err);
+    throw new Error('מחיקת הטיפול נכשלה. לא בוצעו שינויים. נסה שוב.');
+  }
 
-  // ── Step 4: Decrement patient treatment count (atomic, separate from batch) ─
+  // ─── Step 5: Decrement patient's treatment_count ─────────────────────────
+  // This is OUTSIDE the batch intentionally:
+  // treatment_count is a denormalized cache field — slightly stale is acceptable.
+  // It uses Firestore increment() which is atomic on its own.
+  // If this fails, the treatment is already gone (batch committed) and the
+  // count will self-correct on the next createTreatment or a manual refresh.
   if (patientId) {
-    await incrementTreatmentCount(patientId, -1);
+    try {
+      await incrementTreatmentCount(patientId, -1);
+    } catch (err) {
+      console.warn('[treatments.js] treatment_count decrement failed (non-fatal):', err);
+    }
   }
 
   return {
-    deletedPayments:        paymentDocs.length,
-    unlinkedAppointmentId:  linkedAppointmentId,
+    deletedPaymentsCount: linkedPayments.length,
+    appointmentReset: !!appointmentRef,
   };
 }
 
@@ -502,3 +511,51 @@ export async function getTreatmentStats(startDate, endDate) {
 }
 // הוספת כינוי לפונקציה כדי למנוע שגיאות ייבוא בקומפוננטות
 export const getTreatmentById = getTreatment;
+// src/services/treatments.js
+
+/**
+ * getTreatmentByAppointment — check if a treatment already exists
+ * for a given appointment. Used as an idempotency guard before create.
+ *
+ * WHY: If the user taps "Save" twice quickly (double-submit), or the
+ * network drops after Firestore writes but before the response arrives,
+ * we could create duplicate treatments for the same appointment.
+ * This check prevents that.
+ *
+ * @param {string} appointmentId
+ * @returns {Promise<object|null>} existing treatment or null
+ */
+export async function getTreatmentByAppointment(appointmentId) {
+  if (!appointmentId) return null;
+  const user = requireAuth();
+
+  try {
+    const q = query(
+      collection(db, COLLECTION),
+      where('ownerId', '==', user.uid),
+      where('appointmentId', '==', appointmentId)
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) return null;
+
+    // Return the first match — there should never be more than one
+    // but if there is (legacy data), we take the most recent
+    const docs = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) =>
+        (b.treatment_number || 0) - (a.treatment_number || 0)
+      );
+
+    if (docs.length > 1) {
+      console.warn(
+        `[treatments.js] Found ${docs.length} treatments for appointment ` +
+        `${appointmentId} — using most recent`
+      );
+    }
+
+    return docs[0];
+  } catch (err) {
+    console.warn('[treatments.js] Idempotency check failed (non-fatal):', err);
+    return null; // fail open — let the create proceed
+  }
+}

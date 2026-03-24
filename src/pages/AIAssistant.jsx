@@ -1,5 +1,5 @@
 // src/pages/AIAssistant.jsx — AI Assistant with Google Gemini 1.5 Flash
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { PageHeader, Spinner } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { useClinicData } from '../context/useClinicData';
@@ -10,7 +10,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { localDateStr } from '../utils/formatters';
+import { localDateStr, formatCurrency } from '../utils/formatters';
 
 // ─── Suggested prompts (grouped by category) ─────────────────────────────
 const SUGGESTED_GROUPS = [
@@ -44,22 +44,25 @@ const SUGGESTED_GROUPS = [
 ];
 
 // ─── Build system prompt with live clinic context ─────────────────────────────
-function buildSystemPrompt({ patients, appointments, treatments, today }) {
+// עדכון: הפונקציה מקבלת כעת גם את paymentStats ו-payments לסנכרון מלא
+function buildSystemPrompt({ patients, appointments, treatments, today, paymentStats, payments, patientMap }) {
   const activePatients = patients.filter(p => p.status === 'active' && !p.is_archived);
   const todayAppts = appointments.filter(a => a.date === today && a.status === 'scheduled');
-  const patientMap = Object.fromEntries(patients.map(p => [p.id, p]));
 
-  // Month stats
-  const thisMonth = today.slice(0, 7);
-  const monthTreatments = treatments.filter(t => (t.date || '').startsWith(thisMonth));
-  const monthRevenue = monthTreatments
-    .filter(t => t.payment_status === 'paid')
-    .reduce((s, t) => s + (Number(t.amount) || 0), 0);
-  const unpaidCount = monthTreatments.filter(t => t.payment_status !== 'paid').length;
+  // שימוש בנתונים המסונכרנים מהקונטקסט במקום חישוב ידני חלקי
+  const monthRevenue = paymentStats.completed_amount || 0;
+  const pendingRevenue = paymentStats.pending_amount || 0;
+  
+  // הכנת רשימת חובות ספציפית עבור ה-AI
+  const pendingList = payments
+    .filter(p => p.payment_status === 'pending')
+    .slice(0, 10)
+    .map(p => {
+      const name = patientMap[p.patientId || p.patient_id]?.full_name || 'מטופל';
+      return `  • ${name}: ${p.amount}₪ (${p.payment_date})`;
+    }).join('\n');
 
   // Overdue patients (no appointment in last 30 days)
-  // FIX: localDateStr() — toISOString() would shift the cutoff one day earlier
-  // in Israel, wrongly including patients who were seen yesterday as "overdue".
   const thirtyDaysAgo = localDateStr(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
   const recentPatientIds = new Set(
     appointments.filter(a => a.date >= thirtyDaysAgo).map(a => a.patient_id)
@@ -69,13 +72,12 @@ function buildSystemPrompt({ patients, appointments, treatments, today }) {
     .map(p => p.full_name)
     .slice(0, 10);
 
-  // Today's appointments list (names only, no IDs)
+  // Today's appointments list
   const todayList = todayAppts
     .map(a => `  • ${patientMap[a.patient_id]?.full_name || 'מטופל'} בשעה ${a.start_time || '?'}`)
     .join('\n') || '  (אין תורים היום)';
 
   // Upcoming 7 days
-  // FIX: localDateStr() — same UTC-shift reason as thirtyDaysAgo above.
   const in7 = localDateStr(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
   const upcomingCount = appointments.filter(
     a => a.date > today && a.date <= in7 && a.status === 'scheduled'
@@ -84,43 +86,24 @@ function buildSystemPrompt({ patients, appointments, treatments, today }) {
   return `אתה עוזר קליני מקצועי למערכת ניהול קליניקת קלינאות תקשורת בישראל בשם "SpeechCare".
 
 ## תפקידך
-אתה מסייע לקלינאי/ת התקשורת ב:
-1. **תיעוד קליני** — כתיבת סיכומי מפגש, מטרות טיפול בפורמט SMART, ודוחות התקדמות
-2. **הנחיות מקצועיות** — פרוטוקולי טיפול, כלי הערכה, והתערבויות מבוססות ראיות
-3. **תובנות מהמערכת** — ניתוח נתוני מטופלים, דפוסי תורים, ומגמות הכנסה
-4. **משימות אדמיניסטרטיביות** — ניסוח תכתובות להורים, הפניות, ודוחות רשמיים
+אתה מסייע לקלינאי/ת התקשורת בתיעוד, הנחיות מקצועיות ותובנות ניהוליות.
 
-## תחומים קליניים
-בעת ניסוח מטרות טיפול, כסה את התחומים הרלוונטיים:
-- **פונולוגיה** (Phonology) — מערכת הצלילים והפונמות
-- **סמנטיקה** (Semantics) — אוצר מילים והבנת משמעות
-- **תחביר** (Syntax) — מבנה משפטים ודקדוק
-- **פרגמטיקה** (Pragmatics) — שימוש חברתי בשפה ותקשורת
-- **שטף** (Fluency) — גמגום ושטף הדיבור
-
-## פורמטים רשמיים
-תמוך בניסוח דוחות תואמים לדרישות:
-- **משרד החינוך (מטי"ה)** — כולל תיאור תפקודי, ממצאי הערכה, המלצות והתאמות
-- **קופות חולים** — כולל אבחנה, קוד ICD, מספר טיפולים מבוקש, ונימוק רפואי
-
-## נתוני הקליניקה (עדכני מ-Firebase):
+## נתוני הקליניקה (מסונכרנים בזמן אמת):
 - **תאריך היום:** ${today}
-- **סה"כ מטופלים:** ${patients.length} | **פעילים:** ${activePatients.length}
-- **תורים היום (${todayAppts.length}):**
+- **מטופלים פעילים:** ${activePatients.length}
+- **תורים היום:**
 ${todayList}
 - **תורים ב-7 ימים הקרובים:** ${upcomingCount}
-- **טיפולים החודש:** ${monthTreatments.length} | **הכנסות שהתקבלו:** ₪${monthRevenue.toLocaleString('he-IL')}
-- **תשלומים ממתינים החודש:** ${unpaidCount}
+- **הכנסות שהתקבלו החודש (סטטוס שולם):** ${formatCurrency(monthRevenue)}
+- **תשלומים ממתינים/חובות (סטטוס בהמתנה):** ${formatCurrency(pendingRevenue)}
+${pendingRevenue > 0 ? `\nפירוט חובות חלקי:\n${pendingList}` : ''}
 - **מטופלים ללא תור מעל 30 יום:** ${overduePatients.length > 0 ? overduePatients.join(', ') : 'אין'}
 
 ## כללי התנהגות
-- **שפה:** ענה תמיד בעברית אלא אם המשתמש כותב באנגלית
-- **טון:** מקצועי אך אמפתי — כלומר, ישיר ומדויק מבחינה קלינית, אך חם ומכיל
-- **קצרה ומדויקת:** זהו כלי קליני, לא שיחת חולין — היה תמציתי ומועיל
-- **פרטיות:** לעולם אל תציג מספרי תעודת זהות מלאים, כתובות מגורים מלאות, או פרטים רפואיים רגישים בצ'אט, גם אם הם קיימים בנתונים
-- **אמינות:** אל תמציא נתוני מטופלים — השתמש רק במה שסופק בהקשר למעלה
-- **תובנות יזומות:** כאשר רלוונטי, הצבע על מטופלים שלא היו בטיפול זמן רב, תשלומים שלא התקבלו, או דפוסים חריגים
-- **מקורות מקצועיים:** בשאלות קליניות, הסתמך על הנחיות ASHA, ICF, ותקנות משרד הבריאות הישראלי`;
+- **אמינות הנתונים:** כששואלים על כסף, השתמש אך ורק בנתוני ההכנסות והחובות שצוינו לעיל. אל תחשב אותם מחדש לפי כמות הטיפולים.
+- **שפה:** ענה תמיד בעברית מקצועית ואדיבה.
+- **פרטיות:** לעולם אל תציג פרטים מזהים רגישים.
+- **תובנות:** אם שואלים על "סטטוס הקליניקה", סכם את מצב התורים והתשלומים (שולמו מול ממתינים).`;
 }
 
 // ─── Google Gemini API call ──────────────────────────────────────────────────
@@ -128,45 +111,34 @@ async function callGemini(messages, systemPrompt) {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
   if (!apiKey) {
-    throw new Error('VITE_GEMINI_API_KEY is not set in .env. Get a free key from https://ai.google.dev/');
+    throw new Error('VITE_GEMINI_API_KEY is not set in .env.');
   }
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    
-    // Initialize model with systemInstruction (recommended for Gemini 1.5)
     const model = genAI.getGenerativeModel({
       model: 'gemini-3-flash-preview',
       systemInstruction: systemPrompt,
     });
 
-    // Build conversation history for Gemini
-    // Gemini requires: history must start with 'user' role
     const conversationHistory = messages.map(msg => ({
       role: msg.role === 'user' ? 'user' : 'model',
       parts: [{ text: msg.content }],
     }));
 
-    // Filter out the initial assistant greeting from history
-    // Keep only user messages and assistant responses after the first message
     let historyToUse = conversationHistory.filter((msg, idx) => {
-      // Skip the first message if it's from assistant (the greeting)
       if (idx === 0 && msg.role === 'model') return false;
       return true;
     });
 
-    // Ensure history starts with 'user' message
-    // If first message is still from model, skip it
     if (historyToUse.length > 0 && historyToUse[0].role === 'model') {
       historyToUse = historyToUse.slice(1);
     }
 
-    // Start a chat session with the conversation history (all but the last message)
     const chat = model.startChat({
       history: historyToUse.slice(0, -1),
     });
 
-    // Send the last user message
     const lastMessage = historyToUse[historyToUse.length - 1];
     if (!lastMessage || lastMessage.role !== 'user') {
       throw new Error('Last message must be from user');
@@ -182,19 +154,6 @@ async function callGemini(messages, systemPrompt) {
     return responseText;
   } catch (err) {
     console.error('Gemini API error:', err);
-    // Re-throw with a user-friendly message
-    if (err.message?.includes('API key')) {
-      throw new Error('API key not configured. Please add VITE_GEMINI_API_KEY to your .env file.');
-    }
-    if (err.message?.includes('401') || err.message?.includes('403')) {
-      throw new Error('Invalid or expired API key. Check your VITE_GEMINI_API_KEY in .env.');
-    }
-    if (err.message?.includes('429')) {
-      throw new Error('Rate limited by Gemini API. Please try again in a moment.');
-    }
-    if (err.message?.includes('First content should be with role')) {
-      throw new Error('Chat history format error. Please try again or refresh the page.');
-    }
     throw new Error(err.message || 'Failed to get response from Gemini API');
   }
 }
@@ -202,11 +161,17 @@ async function callGemini(messages, systemPrompt) {
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function AIAssistant() {
   const { user } = useAuth();
-  const { patients, appointments, treatments, fetchAll, hasFetched } = useClinicData();
+  const { 
+    patients, 
+    appointments, 
+    treatments, 
+    payments, 
+    paymentStats, 
+    patientMap, 
+    fetchAll, 
+    hasFetched 
+  } = useClinicData();
 
-  // FIX: localDateStr() — timezone-safe. toISOString() shifts to yesterday before
-  // 02:00/03:00 AM local time in Israel, giving the AI wrong date context and
-  // causing "today's appointments" in the system prompt to show yesterday's list.
   const today = localDateStr();
 
   const [messages, setMessages] = useState([
@@ -224,18 +189,24 @@ export default function AIAssistant() {
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Fetch clinic data on mount if not yet loaded
   useEffect(() => {
     if (!hasFetched) fetchAll();
   }, [hasFetched, fetchAll]);
 
-  // Auto-scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  // Build system prompt from live data
-  const systemPrompt = buildSystemPrompt({ patients, appointments, treatments, today });
+  // בניית ה-Prompt עם הנתונים המורחבים
+  const systemPrompt = useMemo(() => buildSystemPrompt({ 
+    patients, 
+    appointments, 
+    treatments, 
+    today, 
+    paymentStats, 
+    payments, 
+    patientMap 
+  }), [patients, appointments, treatments, today, paymentStats, payments, patientMap]);
 
   const send = useCallback(async (text) => {
     const msg = (text || input).trim();
@@ -308,7 +279,6 @@ export default function AIAssistant() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Context status badge */}
           <div className={`hidden sm:flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium ${
             hasFetched ? 'bg-green-50 text-green-700' : 'bg-yellow-50 text-yellow-700'
           }`}>
@@ -335,7 +305,6 @@ export default function AIAssistant() {
             exit={{ opacity: 0, height: 0 }}
             className="mb-4 flex-shrink-0 overflow-hidden"
           >
-            {/* Group tabs */}
             <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
               {SUGGESTED_GROUPS.map((g, i) => (
                 <button
@@ -352,7 +321,6 @@ export default function AIAssistant() {
                 </button>
               ))}
             </div>
-            {/* Prompt buttons */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {SUGGESTED_GROUPS[activeGroup].prompts.map((s, i) => (
                 <motion.button
@@ -379,10 +347,8 @@ export default function AIAssistant() {
             key={i}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2 }}
             className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}
           >
-            {/* Avatar */}
             <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 shadow-sm
               ${m.role === 'user'
                 ? 'bg-blue-600'
@@ -399,7 +365,6 @@ export default function AIAssistant() {
               }
             </div>
 
-            {/* Bubble */}
             <div className={`relative max-w-[85%] md:max-w-[75%] group`}>
               <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed
                 ${m.role === 'user'
@@ -418,7 +383,6 @@ export default function AIAssistant() {
                 )}
               </div>
 
-              {/* Copy button (assistant messages only) */}
               {m.role === 'assistant' && !m.isError && (
                 <button
                   onClick={() => copyMessage(m.content, i)}
@@ -434,13 +398,8 @@ export default function AIAssistant() {
           </motion.div>
         ))}
 
-        {/* Loading indicator */}
         {loading && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex gap-3"
-          >
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex gap-3">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-600 flex items-center justify-center flex-shrink-0 shadow-sm">
               <Bot className="w-4 h-4 text-white" />
             </div>
@@ -460,13 +419,11 @@ export default function AIAssistant() {
             </div>
           </motion.div>
         )}
-
         <div ref={bottomRef} />
       </div>
 
       {/* ── Input Area ── */}
       <div className="flex-shrink-0 space-y-2">
-        {/* Show suggestions toggle (when hidden) */}
         {!showSuggestions && messages.length > 1 && (
           <button
             onClick={() => setShowSuggestions(true)}
@@ -481,7 +438,7 @@ export default function AIAssistant() {
           <textarea
             ref={inputRef}
             className="flex-1 resize-none text-sm text-gray-800 placeholder:text-gray-400 bg-transparent outline-none px-2 py-1 max-h-32 min-h-[2.5rem] leading-relaxed"
-            placeholder="שאל שאלה קלינית, בקש סיכום מפגש, או בקש תובנות מהמערכת..."
+            placeholder="שאל שאלה קלינית, בקש סיכום מפגש, או בקש תובנות..."
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -502,14 +459,11 @@ export default function AIAssistant() {
                 : 'bg-gray-100 text-gray-400 cursor-not-allowed'
               }`}
           >
-            {loading
-              ? <Spinner size="sm" />
-              : <Send className="w-4 h-4" />
-            }
+            {loading ? <Spinner size="sm" /> : <Send className="w-4 h-4" />}
           </button>
         </div>
         <p className="text-[10px] text-gray-400 text-center">
-          Enter לשליחה • Shift+Enter לשורה חדשה • מופעל ע"י Google Gemini 1.5 Flash
+          Enter לשליחה • מופעל ע"י Google Gemini 1.5 Flash • המידע מסונכרן לדאשבורד
         </p>
       </div>
     </div>

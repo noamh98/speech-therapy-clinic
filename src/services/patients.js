@@ -167,40 +167,183 @@ export async function incrementTreatmentCount(patientId, delta) {
 /**
  * deletePatient — soft-delete (archive) + cancel future appointments atomically.
  */
+// src/services/patients.js
+
+/**
+ * deletePatient — Soft-delete with full cascade.
+ *
+ * WHAT THIS DOES:
+ * 1. Archives the patient (is_archived: true) — existing behavior
+ * 2. Deletes all FUTURE scheduled appointments — existing behavior
+ * 3. NEW: Soft-deletes all treatments (is_archived: true)
+ * 4. NEW: Soft-deletes all payments linked to those treatments
+ *
+ * WHY SOFT DELETE FOR TREATMENTS/PAYMENTS (not hard delete):
+ * - Preserves income history for reporting
+ * - Allows full restore via restorePatient()
+ * - Firestore batch limit is 500 ops — soft delete is safer for
+ *   patients with large treatment histories
+ *
+ * WHY TWO BATCHES:
+ * Firestore batches are capped at 500 operations.
+ * A patient with 200 treatments × 3 payments each = 600+ ops.
+ * We split into chunks of 400 to stay safely under the limit.
+ *
+ * @param {string} patientId
+ * @returns {Promise<{
+ *   archivedTreatments: number,
+ *   archivedPayments: number,
+ *   deletedAppointments: number
+ * }>}
+ */
 export async function deletePatient(patientId) {
   const user = requireAuth();
-  
-  // Verify ownership
-  const snap = await getDoc(doc(db, COLLECTION, patientId));
-  if (!snap.exists() || snap.data().ownerId !== user.uid) {
+
+  if (!patientId) throw new Error('Patient ID is required');
+
+  // ─── Step 1: Verify ownership ────────────────────────────────────────────
+  const patientRef = doc(db, COLLECTION, patientId);
+  const patientSnap = await getDoc(patientRef);
+
+  if (!patientSnap.exists()) {
+    throw new Error('Patient not found');
+  }
+  if (patientSnap.data().ownerId !== user.uid) {
     throw new Error('Access denied: patient does not belong to you');
   }
-  
-  const batch = writeBatch(db);
 
-  batch.update(doc(db, COLLECTION, patientId), {
-    is_archived: true,
-    archived_date: serverTimestamp(),
-    updated_date: serverTimestamp(),
-  });
+  // ─── Step 2: Fetch all related data in parallel ──────────────────────────
+  const today = localDateStr();
 
-  const today = localDateStr(); // timezone-safe local date
-  const apptsSnap = await getDocs(
-    query(
+  const [treatmentsSnap, futureApptsSnap, paymentsSnap] = await Promise.all([
+
+    // All treatments for this patient
+    getDocs(query(
+      collection(db, 'treatments'),
+      where('ownerId', '==', user.uid),
+      where('patient_id', '==', patientId)
+    )),
+
+    // Only FUTURE scheduled appointments (past ones stay for history)
+    getDocs(query(
       collection(db, 'appointments'),
       where('ownerId', '==', user.uid),
       where('patient_id', '==', patientId),
+      where('status', '==', 'scheduled'),
       where('date', '>=', today)
-    )
+    )),
+
+    // All payments for this patient
+    getDocs(query(
+      collection(db, 'payments'),
+      where('ownerId', '==', user.uid),
+      where('patientId', '==', patientId)
+    )),
+
+  ]);
+
+  const treatmentDocs = treatmentsSnap.docs;
+  const futureApptDocs = futureApptsSnap.docs;
+  const paymentDocs = paymentsSnap.docs;
+
+  console.log(
+    `[patients.js] Archiving patient ${patientId}: ` +
+    `${treatmentDocs.length} treatments, ` +
+    `${paymentDocs.length} payments, ` +
+    `${futureApptDocs.length} future appointments`
   );
-  apptsSnap.forEach(d => batch.delete(d.ref));
+
+  // ─── Step 3: Commit in batches of 400 ───────────────────────────────────
+  // Firestore hard limit is 500 ops per batch.
+  // We use 400 as a safe ceiling to leave room for the patient update itself.
+  const BATCH_SIZE = 400;
+
+  // Collect all write operations as { ref, type, data } descriptors
+  const allOps = [
+
+    // Archive the patient itself
+    {
+      ref: patientRef,
+      type: 'update',
+      data: {
+        is_archived: true,
+        archived_date: serverTimestamp(),
+        updated_date: serverTimestamp(),
+      }
+    },
+
+    // Soft-delete all treatments
+    ...treatmentDocs.map(d => ({
+      ref: d.ref,
+      type: 'update',
+      data: {
+        is_archived: true,
+        archived_date: serverTimestamp(),
+        updated_date: serverTimestamp(),
+      }
+    })),
+
+    // Soft-delete all payments
+    ...paymentDocs.map(d => ({
+      ref: d.ref,
+      type: 'update',
+      data: {
+        is_archived: true,
+        archived_date: serverTimestamp(),
+        updated_date: serverTimestamp(),
+      }
+    })),
+
+    // Hard-delete future appointments (they haven't happened yet)
+    ...futureApptDocs.map(d => ({
+      ref: d.ref,
+      type: 'delete',
+    })),
+
+  ];
+
+  // Split into chunks and commit sequentially
+  // Sequential (not parallel) to avoid overwhelming Firestore
+  // with concurrent batch commits from the same client
+  const chunks = chunkArray(allOps, BATCH_SIZE);
 
   try {
-    await batch.commit();
-  } catch (error) {
-    console.error('[patients.js] deletePatient batch failed:', error);
-    throw new Error('לא הצלחנו להעביר את המטופל לארכיון. נסה שוב.');
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+
+      for (const op of chunk) {
+        if (op.type === 'delete') {
+          batch.delete(op.ref);
+        } else {
+          batch.update(op.ref, op.data);
+        }
+      }
+
+      await batch.commit();
+    }
+  } catch (err) {
+    console.error('[patients.js] Archive batch failed:', err);
+    throw new Error('הארכוב נכשל. ייתכן שחלק מהנתונים עודכנו. נסה שוב.');
   }
+
+  return {
+    archivedTreatments: treatmentDocs.length,
+    archivedPayments: paymentDocs.length,
+    deletedAppointments: futureApptDocs.length,
+  };
+}
+
+// ─── Helper ───────────────────────────────────────────────────────────────────
+/**
+ * chunkArray — split an array into chunks of maxSize.
+ * Used to stay under Firestore's 500-ops-per-batch limit.
+ */
+function chunkArray(arr, maxSize) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += maxSize) {
+    chunks.push(arr.slice(i, i + maxSize));
+  }
+  return chunks;
 }
 
 /** Validate Israeli ID — Luhn-variant checksum. */
@@ -215,25 +358,121 @@ export function validateIsraeliId(id) {
   return sum % 10 === 0;
 }
 
+// src/services/patients.js
+
+/**
+ * restorePatient — Full restore with cascade.
+ *
+ * MIRRORS deletePatient exactly in reverse:
+ * Un-archives the patient, all their treatments, and all their payments.
+ * Does NOT restore deleted future appointments (they were hard-deleted).
+ *
+ * @param {string} patientId
+ * @returns {Promise<{
+ *   restoredTreatments: number,
+ *   restoredPayments: number
+ * }>}
+ */
 export async function restorePatient(patientId) {
   if (!patientId) throw new Error('Patient ID is required');
   const user = requireAuth();
-  
-  // Verify ownership
-  const snap = await getDoc(doc(db, COLLECTION, patientId));
-  if (!snap.exists() || snap.data().ownerId !== user.uid) {
+
+  // ─── Step 1: Verify ownership ────────────────────────────────────────────
+  const patientRef = doc(db, COLLECTION, patientId);
+  const patientSnap = await getDoc(patientRef);
+
+  if (!patientSnap.exists()) {
+    throw new Error('Patient not found');
+  }
+  if (patientSnap.data().ownerId !== user.uid) {
     throw new Error('Access denied: patient does not belong to you');
   }
-  
+
+  // ─── Step 2: Fetch all archived related data ─────────────────────────────
+  const [treatmentsSnap, paymentsSnap] = await Promise.all([
+
+    getDocs(query(
+      collection(db, 'treatments'),
+      where('ownerId', '==', user.uid),
+      where('patient_id', '==', patientId),
+      where('is_archived', '==', true)
+    )),
+
+    getDocs(query(
+      collection(db, 'payments'),
+      where('ownerId', '==', user.uid),
+      where('patientId', '==', patientId),
+      where('is_archived', '==', true)
+    )),
+
+  ]);
+
+  const treatmentDocs = treatmentsSnap.docs;
+  const paymentDocs = paymentsSnap.docs;
+
+  console.log(
+    `[patients.js] Restoring patient ${patientId}: ` +
+    `${treatmentDocs.length} treatments, ` +
+    `${paymentDocs.length} payments`
+  );
+
+  // ─── Step 3: Commit in batches of 400 ────────────────────────────────────
+  const BATCH_SIZE = 400;
+
+  const allOps = [
+
+    // Restore the patient
+    {
+      ref: patientRef,
+      type: 'update',
+      data: {
+        is_archived: false,
+        archived_date: null,
+        updated_date: serverTimestamp(),
+      }
+    },
+
+    // Restore all treatments
+    ...treatmentDocs.map(d => ({
+      ref: d.ref,
+      type: 'update',
+      data: {
+        is_archived: false,
+        archived_date: null,
+        updated_date: serverTimestamp(),
+      }
+    })),
+
+    // Restore all payments
+    ...paymentDocs.map(d => ({
+      ref: d.ref,
+      type: 'update',
+      data: {
+        is_archived: false,
+        archived_date: null,
+        updated_date: serverTimestamp(),
+      }
+    })),
+
+  ];
+
+  const chunks = chunkArray(allOps, BATCH_SIZE);
+
   try {
-    await updateDoc(doc(db, COLLECTION, patientId), {
-      is_archived: false,
-      status: 'active',       // explicitly reset — filter checks both is_archived AND status
-      archived_date: null,   // clear the archive timestamp
-      updated_date: serverTimestamp(),
-    });
-  } catch (error) {
-    console.error('[patients.js] restorePatient failed:', error);
-    throw new Error('לא הצלחנו לשחזר את המטופל. נסה שוב.');
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+      for (const op of chunk) {
+        batch.update(op.ref, op.data);
+      }
+      await batch.commit();
+    }
+  } catch (err) {
+    console.error('[patients.js] Restore batch failed:', err);
+    throw new Error('השחזור נכשל. ייתכן שחלק מהנתונים עודכנו. נסה שוב.');
   }
+
+  return {
+    restoredTreatments: treatmentDocs.length,
+    restoredPayments: paymentDocs.length,
+  };
 }

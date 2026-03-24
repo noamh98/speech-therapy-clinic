@@ -1,5 +1,5 @@
 // src/pages/Reports.jsx
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useClinicData } from '../context/useClinicData';
 import { PageHeader, StatCard, Card, Spinner } from '../components/ui';
 import {
@@ -20,98 +20,115 @@ const PERIODS = [
 const COLORS = ['#14b8a6', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#10b981'];
 
 export default function Reports() {
-  // שימוש ב-Hook הגלובלי במקום ניהול סטייט מקומי ושליפות כפולות
-  const { treatments, appointments, loading, patientMap } = useClinicData();
+  const { treatments, appointments, payments, loading, patientMap } = useClinicData();
   const [period, setPeriod] = useState('3');
 
-  function filterByPeriod(items) {
+  // פונקציית עזר לסינון לפי תקופה
+  const filterByPeriod = (items, dateKey = 'date') => {
     if (period === 'all') return items;
     const months = parseInt(period);
     const cutoff = new Date();
     cutoff.setMonth(cutoff.getMonth() - months);
-    // FIX: localDateStr() instead of toISOString().slice(0,10).
-    // setMonth() mutates the Date in local time, but toISOString() then converts
-    // to UTC — in Israel (UTC+2/+3) this shifts the cutoff one day earlier than
-    // intended, causing the most recent day to be excluded from every report filter.
     const cutoffStr = localDateStr(cutoff);
-    return items.filter(i => (i.date || '') >= cutoffStr);
-  }
+    return items.filter(i => (i[dateKey] || '') >= cutoffStr);
+  };
 
-  const filteredTreatments = filterByPeriod(treatments);
-  const filteredAppointments = filterByPeriod(appointments);
+  // נתונים מסוננים לפי תקופה
+  const filteredTreatments = useMemo(() => filterByPeriod(treatments), [treatments, period]);
+  const filteredAppointments = useMemo(() => filterByPeriod(appointments), [appointments, period]);
+  const filteredPayments = useMemo(() => filterByPeriod(payments, 'payment_date'), [payments, period]);
 
-  // KPIs
-  const paidTreatments = filteredTreatments.filter(t => t.payment_status === 'paid');
-  const totalIncome = paidTreatments.reduce((s, t) => s + (Number(t.amount) || 0), 0);
-  const avgAmount = paidTreatments.length ? totalIncome / paidTreatments.length : 0;
-  const unpaid = filteredTreatments.filter(t => t.payment_status !== 'paid').reduce((s, t) => s + (Number(t.amount) || 0), 0);
-  const cancelRate = filteredAppointments.length 
-    ? ((filteredAppointments.filter(a => a.status === 'cancelled').length / filteredAppointments.length) * 100).toFixed(1) 
-    : 0;
+  // חישוב KPIs מבוסס תשלומים (כמו בדאשבורד)
+  const stats = useMemo(() => {
+    const completedPayments = filteredPayments.filter(p => p.payment_status === 'completed');
+    const totalIncome = completedPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const pendingIncome = filteredPayments.filter(p => p.payment_status === 'pending').reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    
+    const avgAmount = filteredTreatments.length ? totalIncome / filteredTreatments.length : 0;
+    
+    const cancelRate = filteredAppointments.length 
+      ? ((filteredAppointments.filter(a => a.status === 'cancelled' || a.status === 'missed').length / filteredAppointments.length) * 100).toFixed(1) 
+      : 0;
 
-  // Monthly income chart data
-  const getMonthlyData = () => {
-    const map = {};
+    return { totalIncome, pendingIncome, avgAmount, cancelRate };
+  }, [filteredPayments, filteredTreatments, filteredAppointments]);
+
+  // נתוני גרף הכנסות חודשי - מבוסס תשלומים
+  const monthlyData = useMemo(() => {
+    const dataMap = {};
+    
+    // הכנסות מתשלומים
+    filteredPayments.forEach(p => {
+      const m = (p.payment_date || '').slice(0, 7);
+      if (!m) return;
+      if (!dataMap[m]) dataMap[m] = { month: m, income: 0, count: 0 };
+      if (p.payment_status === 'completed') {
+        dataMap[m].income += Number(p.amount) || 0;
+      }
+    });
+
+    // כמות טיפולים מהטבלה הרלוונטית
     filteredTreatments.forEach(t => {
       const m = (t.date || '').slice(0, 7);
-      if (!m) return;
-      if (!map[m]) map[m] = { month: m, income: 0, count: 0 };
-      if (t.payment_status === 'paid') map[m].income += Number(t.amount) || 0;
-      map[m].count++;
+      if (!m || !dataMap[m]) return;
+      dataMap[m].count++;
     });
-    return Object.values(map)
+
+    return Object.values(dataMap)
       .sort((a, b) => a.month.localeCompare(b.month))
       .map(m => ({
         ...m, 
         month: m.month.slice(5, 7) + '/' + m.month.slice(0, 4)
       }));
-  };
+  }, [filteredPayments, filteredTreatments]);
 
-  // Payment method pie data
-  const getPaymentPieData = () => {
+  // פילוח אמצעי תשלום - מבוסס תשלומים
+  const pieData = useMemo(() => {
     const map = {};
-    filteredTreatments.forEach(t => {
-      const m = t.payment_method || 'other';
-      map[m] = (map[m] || 0) + 1;
+    filteredPayments.forEach(p => {
+      if (p.payment_status !== 'completed') return;
+      const method = p.payment_method || 'other';
+      map[method] = (map[method] || 0) + 1;
     });
     return Object.entries(map).map(([k, v]) => ({
       name: PAYMENT_METHODS.find(pm => pm.value === k)?.label || k,
       value: v,
     }));
-  };
+  }, [filteredPayments]);
 
-  // Top patients
-  const getTopPatients = () => {
+  // מטופלים מובילים - מבוסס תשלומים
+  const topPatients = useMemo(() => {
     const map = {};
-    filteredTreatments.forEach(t => {
-      if (!t.patient_id) return;
-      if (!map[t.patient_id]) {
-        // שימוש ב-patientMap מה-Hook כדי למצוא את שם המטופל בצורה יעילה
-        const patientName = patientMap[t.patient_id]?.full_name || t.patient_name || 'מטופל כללי';
-        map[t.patient_id] = { name: patientName, income: 0 };
+    filteredPayments.forEach(p => {
+      if (p.payment_status !== 'completed') return;
+      const pId = p.patientId || p.patient_id; // תמיכה בשני הפורמטים
+      if (!pId) return;
+      
+      if (!map[pId]) {
+        map[pId] = { 
+          name: patientMap[pId]?.full_name || 'מטופל כללי', 
+          income: 0 
+        };
       }
-      map[t.patient_id].income += Number(t.amount) || 0;
+      map[pId].income += Number(p.amount) || 0;
     });
     return Object.values(map).sort((a, b) => b.income - a.income).slice(0, 5);
-  };
+  }, [filteredPayments, patientMap]);
 
   const exportCSV = () => {
-    const headers = 'תאריך,מטופל,מספר טיפול,סכום,אמצעי תשלום,סטטוס תשלום';
-    const rows = filteredTreatments.map(t =>
-      `${t.date},${patientMap[t.patient_id]?.full_name || t.patient_name || ''},${t.treatment_number || ''},${t.amount || 0},${t.payment_method || ''},${t.payment_status || ''}`
-    );
+    const headers = 'תאריך תשלום,מטופל,סכום,אמצעי תשלום,סטטוס';
+    const rows = filteredPayments.map(p => {
+      const pId = p.patientId || p.patient_id;
+      return `${p.payment_date || ''},${patientMap[pId]?.full_name || ''},${p.amount || 0},${p.payment_method || ''},${p.payment_status || ''}`;
+    });
     const csv = [headers, ...rows].join('\n');
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `report-${localDateStr()}.csv`; a.click();
+    a.href = url; a.download = `clinic-report-${localDateStr()}.csv`; a.click();
   };
 
   if (loading) return <div className="flex justify-center py-12"><Spinner size="lg" /></div>;
-
-  const monthlyData = getMonthlyData();
-  const pieData = getPaymentPieData();
-  const topPatients = getTopPatients();
 
   return (
     <div className="space-y-6">
@@ -129,24 +146,23 @@ export default function Reports() {
         }
       />
 
-      {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={DollarSign} label="סה״כ הכנסות" value={formatCurrency(totalIncome)} color="green" />
-        <StatCard icon={TrendingUp} label="ממוצע לטיפול" value={formatCurrency(Math.round(avgAmount))} color="teal" />
-        <StatCard icon={Activity} label="חוב פתוח" value={formatCurrency(unpaid)} color="orange" />
-        <StatCard icon={Users} label="אחוז ביטולים" value={`${cancelRate}%`} color="purple" />
+        <StatCard icon={DollarSign} label="סה״כ הכנסות" value={formatCurrency(stats.totalIncome)} color="green" />
+        <StatCard icon={TrendingUp} label="ממוצע לטיפול" value={formatCurrency(Math.round(stats.avgAmount))} color="teal" />
+        <StatCard icon={Activity} label="חוב בהמתנה" value={formatCurrency(stats.pendingIncome)} color="orange" />
+        <StatCard icon={Users} label="אחוז ביטולים" value={`${stats.cancelRate}%`} color="purple" />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
         <Card>
-          <h3 className="font-semibold text-gray-900 mb-4 text-sm">הכנסות חודשיות</h3>
+          <h3 className="font-semibold text-gray-900 mb-4 text-sm">הכנסות חודשיות (תשלומים שבוצעו)</h3>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={monthlyData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="month" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `₪${v.toLocaleString()}`} />
-              <Tooltip formatter={v => formatCurrency(v)} />
-              <Bar dataKey="income" fill="#14b8a6" radius={[4, 4, 0, 0]} />
+              <Tooltip formatter={v => formatCurrency(v)} labelStyle={{direction: 'ltr'}} />
+              <Bar dataKey="income" fill="#10b981" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Card>
@@ -158,14 +174,14 @@ export default function Reports() {
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="month" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
+              <Tooltip labelStyle={{direction: 'ltr'}} />
               <Line type="monotone" dataKey="count" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4, fill: '#3b82f6' }} />
             </LineChart>
           </ResponsiveContainer>
         </Card>
 
         <Card>
-          <h3 className="font-semibold text-gray-900 mb-4 text-sm">אמצעי תשלום</h3>
+          <h3 className="font-semibold text-gray-900 mb-4 text-sm">אמצעי תשלום מועדפים</h3>
           <ResponsiveContainer width="100%" height={220}>
             <PieChart>
               <Pie 
@@ -176,7 +192,6 @@ export default function Reports() {
                 cy="50%" 
                 outerRadius={80} 
                 label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                labelLine={false}
               >
                 {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
               </Pie>
@@ -186,7 +201,7 @@ export default function Reports() {
         </Card>
 
         <Card>
-          <h3 className="font-semibold text-gray-900 mb-4 text-sm">מטופלים מובילים (הכנסות)</h3>
+          <h3 className="font-semibold text-gray-900 mb-4 text-sm">מטופלים מובילים</h3>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={topPatients} layout="vertical" margin={{ right: 30 }}>
               <CartesianGrid strokeDasharray="3 3" horizontal={false} />

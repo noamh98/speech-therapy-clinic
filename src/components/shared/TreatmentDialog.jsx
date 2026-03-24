@@ -1,33 +1,12 @@
-// src/components/shared/TreatmentDialog.jsx
 /**
  * FEATURES:
- *
- * 1. Quick note templates (טיפול שגרתי / הערכה / הדרכת הורים)
- *    Three buttons above the goals field. Clicking one pre-fills goals +
- *    description. If fields already have content, a confirmation is shown.
- *
- * 2. "Copy from previous session" button
- *    Appears when editing or creating for a patient who has prior treatments.
- *    Fetches the most recent treatment via getPatientTreatments.
- *    Shows a preview and copies on confirmation.
- *
- * 3. Structured clinical fields (all optional, backward-compatible)
- *    clinicalDomain, cooperationLevel, progressRating — quick selects below
- *    the progress notes field.
- *
- * 4. 1:1 payment guard
- *    When opening an existing treatment, fires ONE targeted
- *    getPaymentsByTreatment(treatmentId) call. If a payment is found, the
- *    "create payment" checkbox is replaced by a read-only summary + "Edit"
- *    button (opens PaymentModal). This prevents duplicate payment creation.
- *
- * 5. localDateStr() replaces toISOString().slice(0,10) for the today default.
- *
- * 6. CASCADING DELETE (fixed)
- *    handleDelete now calls the updated deleteTreatment() which atomically
- *    removes the treatment + all linked payments + unlinks the appointment.
- *    Then calls fetchAll() so Dashboard KPIs, Calendar, and Patient card
- *    all update immediately without a manual browser refresh.
+ * 1. Quick note templates & "Copy from previous session"
+ * 2. Structured clinical fields (domain, cooperation, progress)
+ * 3. 1:1 payment guard (prevents duplicate payments for same treatment)
+ * 4. IDEMPOTENCY GUARD: Checks if treatment exists for appointment before creating.
+ * 5. GRANULAR CONTEXT SYNC: Updates treatments, appointments, payments, and patient counts
+ * optimistically for instant UI feedback.
+ * 6. CASCADING DELETE: Atomically removes treatment + payments and resets appointment.
  */
 
 import { useState, useEffect } from 'react';
@@ -36,6 +15,7 @@ import { useClinicData } from '../../context/useClinicData';
 import {
   createTreatment, updateTreatment, getNextTreatmentNumber,
   getTreatment, deleteTreatment, getPatientTreatments,
+  getTreatmentByAppointment,
 } from '../../services/treatments';
 import { linkAppointmentToTreatment } from '../../services/appointments';
 import { getPaymentsByTreatment } from '../../services/payments';
@@ -52,11 +32,12 @@ export default function TreatmentDialog({
   open, onClose, onSaved,
   appointment, patient, treatment, treatmentId, appointmentId,
 }) {
-  const { setTreatments, setPatients, fetchAll } = useClinicData();
+  const { 
+    setTreatments, setPatients, setAppointments, setPayments, fetchAll 
+  } = useClinicData();
+  
   const [isEdit, setIsEdit] = useState(false);
-
-  const today = localDateStr(); // timezone-safe — never toISOString()
-
+  const today = localDateStr();
   const lockedAppointmentId = appointmentId || appointment?.id || null;
 
   // ── Form state ───────────────────────────────────────────────────────────
@@ -64,29 +45,25 @@ export default function TreatmentDialog({
     date: '', treatment_number: '',
     goals: '', description: '', progress: '',
     template_id: '', files: [], appointment_id: '',
-    // Structured clinical fields
     clinicalDomain: '', cooperationLevel: '', progressRating: '',
-    // Payment creation
     createPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNotes: '',
   });
 
-  const [templates,           setTemplates]           = useState([]);
+  const [templates,           setTemplatesState]       = useState([]); // שינוי שם כדי לא להתנגש עם setTemplates מה-context
   const [filesToUpload,       setFilesToUpload]       = useState([]);
   const [uploadProgress,      setUploadProgress]      = useState({});
   const [loading,             setLoading]             = useState(false);
   const [initialFetchLoading, setInitialFetchLoading] = useState(false);
   const [error,               setError]               = useState('');
 
-  // ── 1:1 Payment guard ────────────────────────────────────────────────────
   const [existingPayment,  setExistingPayment]  = useState(null);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [prevTreatments,   setPrevTreatments]   = useState([]);
+  const [pendingCopyFrom,  setPendingCopyFrom]  = useState(null);
+  const [pendingTemplate,  setPendingTemplate]  = useState(null);
 
-  // ── Copy-previous ────────────────────────────────────────────────────────
-  const [prevTreatments,  setPrevTreatments]  = useState([]);
-  const [pendingCopyFrom, setPendingCopyFrom] = useState(null);
-
-  // ── Template overwrite confirmation ──────────────────────────────────────
-  const [pendingTemplate, setPendingTemplate] = useState(null);
+  // מזהה הטיפול הנוכחי - מחושב מכל המקורות האפשריים
+  const currentTreatmentId = treatmentId || treatment?.id || form.id || appointment?.treatmentId;
 
   // ── Effects ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -101,14 +78,11 @@ export default function TreatmentDialog({
     setPendingTemplate(null);
     setPendingCopyFrom(null);
 
-    const effectiveTreatmentId = treatmentId || treatment?.id || appointment?.treatmentId;
-
-    if (effectiveTreatmentId) {
-      fetchAndFillTreatment(effectiveTreatmentId);
-      // 1:1 check: load existing payment for this treatment (single targeted query)
-      getPaymentsByTreatment(effectiveTreatmentId)
+    if (currentTreatmentId) {
+      fetchAndFillTreatment(currentTreatmentId);
+      getPaymentsByTreatment(currentTreatmentId)
         .then(pmts => { if (pmts?.length > 0) setExistingPayment(pmts[0]); })
-        .catch(() => {}); // non-fatal
+        .catch(() => {});
     } else {
       setIsEdit(false);
       setForm({
@@ -128,13 +102,12 @@ export default function TreatmentDialog({
       }
     }
 
-    // Load previous treatments for copy-prev feature
     if (patient?.id) {
       getPatientTreatments(patient.id)
         .then(ts => setPrevTreatments(ts || []))
         .catch(() => {});
     }
-  }, [open, treatmentId, appointmentId, appointment, patient]); // eslint-disable-line
+  }, [open, currentTreatmentId, appointment, patient]);
 
   async function fetchAndFillTreatment(id) {
     setInitialFetchLoading(true);
@@ -163,11 +136,10 @@ export default function TreatmentDialog({
   async function loadTemplates() {
     try {
       const t = await getTemplates();
-      setTemplates(t.filter(tmp => tmp.type === 'treatment_note' && tmp.active));
+      setTemplatesState(t.filter(tmp => tmp.type === 'treatment_note' && tmp.active));
     } catch { /* non-fatal */ }
   }
 
-  // ── Template application ──────────────────────────────────────────────────
   const applyTemplate = (tpl, confirmed = false) => {
     const hasContent = form.goals?.trim() || form.description?.trim();
     if (hasContent && !confirmed) { setPendingTemplate(tpl); return; }
@@ -180,8 +152,6 @@ export default function TreatmentDialog({
     }));
   };
 
-  // ── Copy-previous ─────────────────────────────────────────────────────────
-  const currentTreatmentId = treatmentId || treatment?.id;
   const prevForCopy = prevTreatments.find(t => t.id !== currentTreatmentId);
 
   const handleCopyPrevious = (confirmed = false) => {
@@ -191,110 +161,179 @@ export default function TreatmentDialog({
     setPendingCopyFrom(null);
     setForm(f => ({
       ...f,
-      goals:          prevForCopy.goals          || f.goals,
-      description:    prevForCopy.description    || f.description,
-      progress:       prevForCopy.progress       || f.progress,
+      goals:           prevForCopy.goals          || f.goals,
+      description:     prevForCopy.description    || f.description,
+      progress:        prevForCopy.progress       || f.progress,
       clinicalDomain: prevForCopy.clinicalDomain || f.clinicalDomain,
     }));
   };
 
-  // ── File handling ─────────────────────────────────────────────────────────
   const handleFileChange = (e) => {
     if (e.target.files) setFilesToUpload(prev => [...prev, ...Array.from(e.target.files)]);
   };
   const removeFileFromQueue = (idx) =>
     setFilesToUpload(prev => prev.filter((_, i) => i !== idx));
 
-  // ── Delete treatment — CASCADING ──────────────────────────────────────────
-  // Calls the updated deleteTreatment() which atomically removes:
-  //   • The treatment document
-  //   • All linked payment documents
-  //   • Unlinks + resets the parent appointment to 'scheduled'
-  // Then fetchAll() refreshes context so Dashboard/Calendar update immediately.
+  // ── handleDelete — Atomic Cascade ──────────────────────────────────────────
   const handleDelete = async () => {
-    const id = currentTreatmentId || form.id;
-    if (!id || !window.confirm(
-      'האם אתה בטוח שברצונך למחוק את תיעוד הטיפול?\n\nפעולה זו תסיר את הטיפול, התשלומים המקושרים, ותחזיר את התור ליומן.'
+    if (!currentTreatmentId) return;
+    if (!window.confirm(
+      'האם אתה בטוח שברצונך למחוק את תיעוד הטיפול?\n' +
+      'כל התשלומים המקושרים ימחקו, והתור יחזור למצב "מתוכנן".'
     )) return;
 
     setLoading(true);
+    setError('');
+
     try {
-      await deleteTreatment(id, patient?.id);
+      const { deletedPaymentsCount, appointmentReset } = await deleteTreatment(currentTreatmentId, patient?.id);
 
-      // Full context refresh — Dashboard KPIs, Calendar colours, and Patient
-      // card all update in this render cycle, no browser refresh needed.
-      if (fetchAll) await fetchAll();
+      // Granular Sync - Delete
+      setTreatments(prev => prev.filter(t => t.id !== currentTreatmentId));
+      if (deletedPaymentsCount > 0) {
+        setPayments(prev => prev.filter(p => p.treatmentId !== currentTreatmentId));
+      }
+      if (appointmentReset && lockedAppointmentId) {
+        setAppointments(prev => prev.map(a =>
+          a.id === lockedAppointmentId ? { ...a, status: 'scheduled', treatmentId: null } : a
+        ));
+      }
+      if (patient?.id) {
+        setPatients(prev => prev.map(p =>
+          p.id === patient.id ? { ...p, treatment_count: Math.max(0, (p.treatment_count || 1) - 1) } : p
+        ));
+      }
 
+      fetchAll().catch(() => {});
       onSaved();
       onClose();
     } catch (err) {
-      console.error('[TreatmentDialog] Delete error:', err);
-      setError('שגיאה במחיקת הטיפול: ' + (err.message || 'נסה שוב'));
+      setError(err.message || 'שגיאה במחיקת הטיפול');
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Submit ────────────────────────────────────────────────────────────────
+  // ── handleSubmit — Idempotency & Granular Sync ─────────────────────────────
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!patient?.id) return setError('חסר זיהוי מטופל');
     setError('');
     setLoading(true);
+
     try {
-      // Upload new files first
-      const newFiles = [];
-      for (const file of filesToUpload) {
-        const uploaded = await uploadPatientFile(patient.id, file, pct =>
-          setUploadProgress(prev => ({ ...prev, [file.name]: pct }))
-        );
-        newFiles.push(uploaded);
-      }
-      const allFiles           = [...(form.files || []), ...newFiles];
       const finalAppointmentId = form.appointment_id || lockedAppointmentId || null;
 
+      // 1. Idempotency guard - Check before upload/create
+      if (!isEdit && finalAppointmentId) {
+        const existing = await getTreatmentByAppointment(finalAppointmentId);
+        if (existing) {
+          console.warn('[TreatmentDialog] Treatment exists, switching to edit mode.');
+          setIsEdit(true);
+          setForm(prev => ({ ...prev, id: existing.id }));
+          // נטען את הנתונים שלו ונעצור כדי שהמשתמש יראה מה הוא עורך
+          await fetchAndFillTreatment(existing.id);
+          setLoading(false);
+          setError('נמצא תיעוד קיים לתור זה - המערכת עברה למצב עריכה');
+          return;
+        }
+      }
+
+      // 2. Upload files
+      const newlyUploadedFiles = [];
+      for (const file of filesToUpload) {
+        const uploadedFile = await uploadPatientFile(
+          patient.id, file,
+          (percent) => setUploadProgress(prev => ({ ...prev, [file.name]: percent }))
+        );
+        newlyUploadedFiles.push(uploadedFile);
+      }
+      const allFiles = [...(form.files || []), ...newlyUploadedFiles];
+
+      // 3. Build data
       const dataToSave = {
-        date:             form.date,
+        date: form.date,
         treatment_number: form.treatment_number,
-        goals:            form.goals,
-        description:      form.description,
-        progress:         form.progress,
-        files:            allFiles,
-        patient_id:       patient.id,
-        patient_name:     patient.full_name,
-        appointmentId:    finalAppointmentId,
-        // Structured clinical fields (null when blank — backward-compatible)
-        clinicalDomain:   form.clinicalDomain   || null,
+        goals: form.goals,
+        description: form.description,
+        progress: form.progress,
+        files: allFiles,
+        patient_id: patient.id,
+        patient_name: patient.full_name,
+        appointmentId: finalAppointmentId,
+        clinicalDomain: form.clinicalDomain || null,
         cooperationLevel: form.cooperationLevel ? Number(form.cooperationLevel) : null,
-        progressRating:   form.progressRating   || null,
-        // Payment creation
-        paymentAmount:    form.createPayment ? Number(form.paymentAmount) || 0 : 0,
-        payment_method:   form.paymentMethod || 'cash',
-        payment_notes:    form.paymentNotes  || '',
+        progressRating: form.progressRating || null,
+        paymentAmount: form.createPayment ? Number(form.paymentAmount) || 0 : 0,
+        payment_method: form.paymentMethod || 'cash',
+        payment_notes: form.paymentNotes || '',
       };
 
-      let savedTreatmentId = isEdit ? (currentTreatmentId || form.id) : null;
+      // 4. Save to Firestore
       let savedTreatment;
-
-      if (isEdit && savedTreatmentId) {
-        savedTreatment = await updateTreatment(savedTreatmentId, dataToSave);
-        setTreatments(prev => prev.map(t =>
-          t.id === savedTreatmentId ? { ...t, ...dataToSave, id: savedTreatmentId } : t
-        ));
+      let cid;
+      if (isEdit) {
+        cid = currentTreatmentId;
+        savedTreatment = await updateTreatment(cid, dataToSave);
       } else {
         savedTreatment = await createTreatment(dataToSave);
-        savedTreatmentId = savedTreatment.id;
-        setTreatments(prev => [savedTreatment, ...prev]);
+        cid = savedTreatment.id;
       }
 
-      // Link appointment to treatment
-      if (finalAppointmentId && savedTreatmentId) {
-        try { await linkAppointmentToTreatment(finalAppointmentId, savedTreatmentId); }
-        catch { /* non-fatal */ }
+      // 5. GRANULAR CONTEXT SYNC (Optimistic)
+      
+      // 5a. Update Treatments list
+setTreatments(prev => {
+  // יצירת אובייקט הטיפול המעודכן עם השמות שה-Context מצפה להם
+  const updatedRecord = { 
+    ...dataToSave, 
+    id: cid,
+    // הבטחת תאימות ל-Context (מניעת F5)
+    appointmentId: finalAppointmentId 
+  };
+
+  const exists = prev.find(t => t.id === cid);
+  if (exists) {
+    return prev.map(t => t.id === cid ? updatedRecord : t);
+  }
+  return [updatedRecord, ...prev];
+});
+
+      // 5b. Update Patient treatment count
+      if (!isEdit && patient?.id) {
+        setPatients(prev => prev.map(p =>
+          p.id === patient.id ? { ...p, treatment_count: (p.treatment_count || 0) + 1 } : p
+        ));
       }
 
-      // Full refresh so all derived data (docStatusMap, patient count, etc.) updates
-      if (fetchAll) await fetchAll();
+      // 5c. Update Appointment status
+      if (finalAppointmentId) {
+        setAppointments(prev => prev.map(a =>
+          a.id === finalAppointmentId ? { ...a, status: 'completed', treatmentId: cid } : a
+        ));
+        // Link in background
+        linkAppointmentToTreatment(finalAppointmentId, cid).catch(() => {});
+      }
+
+      // 5d. Optimistic Payment sync
+      if (!isEdit && dataToSave.paymentAmount > 0 && !existingPayment) {
+        const syntheticPayment = {
+          id: `temp_${cid}`,
+          treatmentId: cid,
+          patientId: patient.id,
+          patient_id: patient.id,
+          appointmentId: finalAppointmentId,
+          amount: dataToSave.paymentAmount,
+          payment_method: dataToSave.payment_method,
+          payment_status: 'completed',
+          payment_date: form.date,
+          _isOptimistic: true,
+        };
+        setPayments(prev => [syntheticPayment, ...prev]);
+      }
+
+      // 6. Background reconcile
+      fetchAll().catch(() => {});
 
       onSaved();
       onClose();
@@ -309,7 +348,6 @@ export default function TreatmentDialog({
   const set    = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
   const toggle = k => e => setForm(f => ({ ...f, [k]: e.target.checked }));
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <>
       <Modal open={open} onClose={onClose}
@@ -323,8 +361,6 @@ export default function TreatmentDialog({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
-
-            {/* Patient header + delete */}
             <div className="bg-teal-50 rounded-xl p-3 border border-teal-100 flex justify-between items-center">
               <p className="text-sm font-bold text-teal-800">מטופל/ת: {patient?.full_name || '—'}</p>
               {isEdit && (
@@ -335,7 +371,6 @@ export default function TreatmentDialog({
               )}
             </div>
 
-            {/* Date + treatment number */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">תאריך *</label>
@@ -347,121 +382,86 @@ export default function TreatmentDialog({
               </div>
             </div>
 
-            {/* ── Quick templates + Copy previous ── */}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold text-gray-500 flex items-center gap-1">
                 <Zap className="w-3.5 h-3.5" /> תבניות:
               </span>
               {QUICK_NOTE_TEMPLATES.map(tpl => (
-                <button
-                  key={tpl.id}
-                  type="button"
-                  onClick={() => applyTemplate(tpl)}
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs bg-gray-100 hover:bg-teal-50 hover:text-teal-700 rounded-full border border-gray-200 hover:border-teal-200 transition-colors font-medium"
-                >
+                <button key={tpl.id} type="button" onClick={() => applyTemplate(tpl)}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs bg-gray-100 hover:bg-teal-50 hover:text-teal-700 rounded-full border border-gray-200 hover:border-teal-200 transition-colors font-medium">
                   {tpl.icon} {tpl.label}
                 </button>
               ))}
               {prevForCopy && (
-                <button
-                  type="button"
-                  onClick={() => handleCopyPrevious()}
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-full border border-blue-200 transition-colors font-medium"
-                >
+                <button type="button" onClick={() => handleCopyPrevious()}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-full border border-blue-200 transition-colors font-medium">
                   <Copy className="w-3 h-3" /> העתק מהטיפול הקודם
                 </button>
               )}
             </div>
 
-            {/* Goals */}
             <div>
               <label className="label">מטרות הטיפול</label>
-              <textarea className="input resize-none" rows={2}
-                value={form.goals} onChange={set('goals')} placeholder="מה המטרות להיום?" />
+              <textarea className="input resize-none" rows={2} value={form.goals} onChange={set('goals')} placeholder="מה המטרות להיום?" />
             </div>
 
-            {/* Description */}
             <div>
               <label className="label">תיאור הטיפול *</label>
-              <textarea className="input resize-none" rows={4}
-                value={form.description} onChange={set('description')}
-                placeholder="תאר את מהלך הטיפול..." required />
+              <textarea className="input resize-none" rows={4} value={form.description} onChange={set('description')} placeholder="תאר את מהלך הטיפול..." required />
             </div>
 
-            {/* Progress */}
             <div>
               <label className="label">הערות התקדמות</label>
-              <textarea className="input resize-none" rows={2}
-                value={form.progress} onChange={set('progress')} placeholder="מה השתפר?" />
+              <textarea className="input resize-none" rows={2} value={form.progress} onChange={set('progress')} placeholder="מה השתפר?" />
             </div>
 
-            {/* ── Structured clinical fields ── */}
             <div className="border-t border-gray-100 pt-4">
               <p className="text-xs font-semibold text-gray-400 uppercase mb-3">שדות קליניים (אופציונלי)</p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="label">תחום קליני</label>
                   <select className="input" value={form.clinicalDomain} onChange={set('clinicalDomain')}>
-                    {CLINICAL_DOMAINS.map(d => (
-                      <option key={d.value} value={d.value}>{d.label}</option>
-                    ))}
+                    <option value="">— בחר תחום —</option>
+                    {CLINICAL_DOMAINS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="label">שיתוף פעולה (1–5)</label>
                   <select className="input" value={form.cooperationLevel} onChange={set('cooperationLevel')}>
                     <option value="">— בחר —</option>
-                    {COOPERATION_LEVELS.map(c => (
-                      <option key={c.value} value={c.value}>
-                        {c.value} — {c.label.split(' — ')[1]}
-                      </option>
-                    ))}
+                    {COOPERATION_LEVELS.map(c => <option key={c.value} value={c.value}>{c.value} — {c.label.split(' — ')[1]}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="label">דירוג התקדמות</label>
                   <select className="input" value={form.progressRating} onChange={set('progressRating')}>
-                    {PROGRESS_RATINGS.map(r => (
-                      <option key={r.value} value={r.value}>{r.label}</option>
-                    ))}
+                    <option value="">— בחר —</option>
+                    {PROGRESS_RATINGS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                   </select>
                 </div>
               </div>
             </div>
 
-            {/* ── Payment section — 1:1 guard ── */}
             <div className="border-t-2 border-teal-100 pt-4">
               {existingPayment ? (
-                // Existing payment found → show summary, block new creation
                 <div className="p-3 bg-green-50 rounded-lg border border-green-200">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-bold text-green-800">תשלום קיים לטיפול זה</span>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentModalOpen(true)}
-                      className="flex items-center gap-1 text-xs px-3 py-1.5 bg-white border border-green-300 text-green-700 rounded-lg hover:bg-green-50 font-medium"
-                    >
+                    <button type="button" onClick={() => setPaymentModalOpen(true)}
+                      className="flex items-center gap-1 text-xs px-3 py-1.5 bg-white border border-green-300 text-green-700 rounded-lg hover:bg-green-50 font-medium">
                       <Pencil size={12} /> ערוך תשלום
                     </button>
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-xs text-green-700">
                     <div><span className="font-medium block">סכום</span>₪{existingPayment.amount}</div>
-                    <div>
-                      <span className="font-medium block">סטטוס</span>
-                      {existingPayment.payment_status === 'completed' ? 'שולם ✓' : 'ממתין'}
-                    </div>
+                    <div><span className="font-medium block">סטטוס</span>{existingPayment.payment_status === 'completed' ? 'שולם ✓' : 'ממתין'}</div>
                     <div><span className="font-medium block">תאריך</span>{existingPayment.payment_date || '—'}</div>
                   </div>
-                  <p className="text-[10px] text-green-600 mt-2">
-                    כבר קיים תשלום אחד לטיפול זה — לא ניתן ליצור תשלום נוסף.
-                  </p>
                 </div>
               ) : (
-                // No payment yet → show create flow
                 <>
                   <div className="flex items-center gap-3 mb-4 p-3 bg-teal-50 rounded-lg border border-teal-200">
-                    <input type="checkbox" id="createPayment"
-                      checked={form.createPayment} onChange={toggle('createPayment')}
+                    <input type="checkbox" id="createPayment" checked={form.createPayment} onChange={toggle('createPayment')}
                       className="w-5 h-5 rounded border-teal-300 text-teal-600 cursor-pointer" />
                     <label htmlFor="createPayment" className="flex items-center gap-2 cursor-pointer flex-1">
                       <CheckCircle2 size={16} className="text-teal-600" />
@@ -473,52 +473,35 @@ export default function TreatmentDialog({
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="label text-teal-900 font-bold">סכום (₪) *</label>
-                          <input type="number" className="input border-teal-300 bg-white"
-                            value={form.paymentAmount} onChange={set('paymentAmount')}
-                            placeholder="0" required={form.createPayment} />
+                          <input type="number" className="input border-teal-300 bg-white" value={form.paymentAmount} onChange={set('paymentAmount')} required={form.createPayment} />
                         </div>
                         <div>
                           <label className="label text-teal-900 font-bold">אמצעי תשלום</label>
-                          <select className="input border-teal-300 bg-white"
-                            value={form.paymentMethod} onChange={set('paymentMethod')}>
-                            {PAYMENT_METHODS.map(m => (
-                              <option key={m.value} value={m.value}>{m.label}</option>
-                            ))}
+                          <select className="input border-teal-300 bg-white" value={form.paymentMethod} onChange={set('paymentMethod')}>
+                            {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                           </select>
                         </div>
                       </div>
-                      <div>
-                        <label className="label text-teal-900 font-bold">הערות תשלום</label>
-                        <input type="text" className="input border-teal-300 bg-white"
-                          value={form.paymentNotes} onChange={set('paymentNotes')}
-                          placeholder="למשל: תשלום חלקי, עם קבלה..." />
-                      </div>
-                      <p className="text-xs text-teal-700 font-medium">
-                        💡 התשלום יווצר אוטומטית כשתשמור את הטיפול
-                      </p>
+                      <input type="text" className="input border-teal-300 bg-white" value={form.paymentNotes} onChange={set('paymentNotes')} placeholder="הערות תשלום..." />
                     </div>
                   )}
                 </>
               )}
             </div>
 
-            {/* Existing attached files */}
             {form.files?.length > 0 && (
               <div className="space-y-2">
                 <label className="block text-xs font-bold text-gray-400 uppercase">קבצים מצורפים:</label>
                 <div className="flex flex-wrap gap-2">
                   {form.files.map((file, idx) => (
-                    <a key={idx} href={file.url} target="_blank" rel="noreferrer"
-                      className="flex items-center gap-2 bg-white border border-teal-100 px-3 py-1.5 rounded-lg text-xs text-teal-700 hover:bg-teal-50 transition-colors">
-                      <FileText size={12} />
-                      <span className="truncate max-w-[150px]">{file.name}</span>
+                    <a key={idx} href={file.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-white border border-teal-100 px-3 py-1.5 rounded-lg text-xs text-teal-700 hover:bg-teal-50 transition-colors">
+                      <FileText size={12} /> <span className="truncate max-w-[150px]">{file.name}</span>
                     </a>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* File upload */}
             <div className="p-4 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
               <label className="flex items-center justify-center gap-2 p-3 bg-white border border-gray-200 rounded-xl cursor-pointer hover:bg-teal-50 transition-all group">
                 <Upload className="w-5 h-5 text-gray-400 group-hover:text-teal-500" />
@@ -533,46 +516,35 @@ export default function TreatmentDialog({
                         <FileText size={14} className="text-teal-500" />
                         <span className="text-xs font-medium truncate">{file.name}</span>
                       </div>
-                      {loading
-                        ? <span className="text-[10px] font-bold text-teal-600">{uploadProgress[file.name] || 0}%</span>
-                        : <button type="button" onClick={() => removeFileFromQueue(idx)}
-                            className="text-red-400 hover:bg-red-50 p-1 rounded-full">
-                            <X size={14} />
-                          </button>
-                      }
+                      {loading ? (
+                        <span className="text-[10px] font-bold text-teal-600">{uploadProgress[file.name] || 0}%</span>
+                      ) : (
+                        <button type="button" onClick={() => removeFileFromQueue(idx)} className="text-red-400 hover:bg-red-50 p-1 rounded-full">
+                          <X size={14} />
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
             </div>
 
-            {error && (
-              <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100 font-medium">
-                {error}
-              </div>
-            )}
+            {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100 font-medium">{error}</div>}
 
             <div className="flex gap-3 pt-4">
-              <button type="button" className="btn-secondary flex-1 py-3"
-                onClick={onClose} disabled={loading}>ביטול</button>
-              <button type="submit" disabled={loading}
-                className="btn-primary flex-1 py-3 flex items-center justify-center gap-2">
-                {loading
-                  ? <><Loader2 className="w-5 h-5 animate-spin" /> <span>שומר...</span></>
-                  : <span>{isEdit ? 'עדכן תיעוד' : 'שמור תיעוד'}</span>
-                }
+              <button type="button" className="btn-secondary flex-1 py-3" onClick={onClose} disabled={loading}>ביטול</button>
+              <button type="submit" disabled={loading} className="btn-primary flex-1 py-3 flex items-center justify-center gap-2">
+                {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> <span>שומר...</span></> : <span>{isEdit ? 'עדכן תיעוד' : 'שמור תיעוד'}</span>}
               </button>
             </div>
           </form>
         )}
       </Modal>
 
-      {/* Template overwrite confirmation */}
+      {/* Modals for templates/copy confirmation */}
       {pendingTemplate && (
         <Modal open title="החלפת תוכן קיים" onClose={() => setPendingTemplate(null)} maxWidth="max-w-sm">
-          <p className="text-sm text-gray-600 mb-4">
-            יש כבר תוכן בשדות המטרות / התיאור. האם להחליף עם תבנית "{pendingTemplate.label}"?
-          </p>
+          <p className="text-sm text-gray-600 mb-4">יש כבר תוכן בשדות. האם להחליף עם תבנית "{pendingTemplate.label}"?</p>
           <div className="flex gap-3">
             <button className="btn-secondary flex-1" onClick={() => setPendingTemplate(null)}>ביטול</button>
             <button className="btn-primary flex-1" onClick={() => applyTemplate(pendingTemplate, true)}>החלף</button>
@@ -580,16 +552,9 @@ export default function TreatmentDialog({
         </Modal>
       )}
 
-      {/* Copy-previous confirmation */}
       {pendingCopyFrom && (
         <Modal open title="העתקת טיפול קודם" onClose={() => setPendingCopyFrom(null)} maxWidth="max-w-sm">
-          <p className="text-sm text-gray-600 mb-2">
-            יש כבר תוכן בשדות. האם להחליף עם נתונים מהטיפול מתאריך {pendingCopyFrom.date}?
-          </p>
-          <div className="p-3 bg-gray-50 rounded-lg text-xs text-gray-500 mb-4 space-y-1">
-            <p><strong>מטרות:</strong> {pendingCopyFrom.goals?.slice(0, 80) || '—'}</p>
-            <p><strong>תיאור:</strong> {pendingCopyFrom.description?.slice(0, 80) || '—'}{pendingCopyFrom.description?.length > 80 ? '...' : ''}</p>
-          </div>
+          <p className="text-sm text-gray-600 mb-4">יש כבר תוכן בשדות. האם להחליף עם נתונים מהטיפול מתאריך {pendingCopyFrom.date}?</p>
           <div className="flex gap-3">
             <button className="btn-secondary flex-1" onClick={() => setPendingCopyFrom(null)}>ביטול</button>
             <button className="btn-primary flex-1" onClick={() => handleCopyPrevious(true)}>העתק</button>
@@ -597,18 +562,17 @@ export default function TreatmentDialog({
         </Modal>
       )}
 
-      {/* Edit existing payment (1:1 guard) */}
+      {/* Payment Modal for existing payments */}
       {paymentModalOpen && existingPayment && (
         <PaymentModal
           isOpen={paymentModalOpen}
           onClose={() => setPaymentModalOpen(false)}
           onSave={() => {
             setPaymentModalOpen(false);
-            // Re-fetch to refresh the payment summary display
             if (currentTreatmentId) {
-              getPaymentsByTreatment(currentTreatmentId)
-                .then(pmts => { if (pmts?.length > 0) setExistingPayment(pmts[0]); })
-                .catch(() => {});
+              getPaymentsByTreatment(currentTreatmentId).then(pmts => { 
+                if (pmts?.length > 0) setExistingPayment(pmts[0]); 
+              });
             }
           }}
           payment={existingPayment}
