@@ -5,8 +5,10 @@
  * 3. 1:1 payment guard (prevents duplicate payments for same treatment)
  * 4. IDEMPOTENCY GUARD: Checks if treatment exists for appointment before creating.
  * 5. GRANULAR CONTEXT SYNC: Updates treatments, appointments, payments, and patient counts
- * optimistically for instant UI feedback.
+ *    optimistically for instant UI feedback.
  * 6. CASCADING DELETE: Atomically removes treatment + payments and resets appointment.
+ * 7. FIX: clinicalDomain → multi-select button group
+ * 8. FIX: תשלום נשמר גם בעת עריכת טיפול קיים
  */
 
 import { useState, useEffect } from 'react';
@@ -18,7 +20,8 @@ import {
   getTreatmentByAppointment,
 } from '../../services/treatments';
 import { linkAppointmentToTreatment } from '../../services/appointments';
-import { getPaymentsByTreatment } from '../../services/payments';
+// ✅ שינוי 1: הוספת createPayment לייבוא
+import { getPaymentsByTreatment, createPayment } from '../../services/payments';
 import { getTemplates } from '../../services/templates';
 import { uploadPatientFile } from '../../services/storage';
 import {
@@ -32,10 +35,10 @@ export default function TreatmentDialog({
   open, onClose, onSaved,
   appointment, patient, treatment, treatmentId, appointmentId,
 }) {
-  const { 
-    setTreatments, setPatients, setAppointments, setPayments, fetchAll 
+  const {
+    setTreatments, setPatients, setAppointments, setPayments, fetchAll
   } = useClinicData();
-  
+
   const [isEdit, setIsEdit] = useState(false);
   const today = localDateStr();
   const lockedAppointmentId = appointmentId || appointment?.id || null;
@@ -45,7 +48,7 @@ export default function TreatmentDialog({
     date: '', treatment_number: '',
     goals: '', description: '', progress: '',
     template_id: '', files: [], appointment_id: '',
-    clinicalDomain: '', cooperationLevel: '', progressRating: '',
+    clinicalDomain: [], clinicalDomainOther: '', cooperationLevel: '', progressRating: '',
     createPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNotes: '',
   });
 
@@ -91,7 +94,7 @@ export default function TreatmentDialog({
         goals: '', description: '', progress: '',
         template_id: '', files: [],
         appointment_id: lockedAppointmentId || '',
-        clinicalDomain: '', cooperationLevel: '', progressRating: '',
+        clinicalDomain: [], clinicalDomainOther: '', cooperationLevel: '', progressRating: '',
         createPayment: false,
         paymentAmount: appointment?.price || '',
         paymentMethod: 'cash', paymentNotes: '',
@@ -119,7 +122,10 @@ export default function TreatmentDialog({
           date:             data.date || today,
           files:            data.files || [],
           appointment_id:   data.appointment_id || appointment?.id || '',
-          clinicalDomain:   data.clinicalDomain   || '',
+          clinicalDomain:   Array.isArray(data.clinicalDomain)
+                              ? data.clinicalDomain
+                              : data.clinicalDomain ? [data.clinicalDomain] : [],
+          clinicalDomainOther: data.clinicalDomainOther || '',
           cooperationLevel: data.cooperationLevel != null ? String(data.cooperationLevel) : '',
           progressRating:   data.progressRating   || '',
           createPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNotes: '',
@@ -231,7 +237,6 @@ export default function TreatmentDialog({
           console.warn('[TreatmentDialog] Treatment exists, switching to edit mode.');
           setIsEdit(true);
           setForm(prev => ({ ...prev, id: existing.id }));
-          // נטען את הנתונים שלו ונעצור כדי שהמשתמש יראה מה הוא עורך
           await fetchAndFillTreatment(existing.id);
           setLoading(false);
           setError('נמצא תיעוד קיים לתור זה - המערכת עברה למצב עריכה');
@@ -262,6 +267,7 @@ export default function TreatmentDialog({
         patient_name: patient.full_name,
         appointmentId: finalAppointmentId,
         clinicalDomain: form.clinicalDomain || null,
+        clinicalDomainOther: form.clinicalDomainOther || '',
         cooperationLevel: form.cooperationLevel ? Number(form.cooperationLevel) : null,
         progressRating: form.progressRating || null,
         paymentAmount: form.createPayment ? Number(form.paymentAmount) || 0 : 0,
@@ -281,23 +287,20 @@ export default function TreatmentDialog({
       }
 
       // 5. GRANULAR CONTEXT SYNC (Optimistic)
-      
-      // 5a. Update Treatments list
-setTreatments(prev => {
-  // יצירת אובייקט הטיפול המעודכן עם השמות שה-Context מצפה להם
-  const updatedRecord = { 
-    ...dataToSave, 
-    id: cid,
-    // הבטחת תאימות ל-Context (מניעת F5)
-    appointmentId: finalAppointmentId 
-  };
 
-  const exists = prev.find(t => t.id === cid);
-  if (exists) {
-    return prev.map(t => t.id === cid ? updatedRecord : t);
-  }
-  return [updatedRecord, ...prev];
-});
+      // 5a. Update Treatments list
+      setTreatments(prev => {
+        const updatedRecord = {
+          ...dataToSave,
+          id: cid,
+          appointmentId: finalAppointmentId
+        };
+        const exists = prev.find(t => t.id === cid);
+        if (exists) {
+          return prev.map(t => t.id === cid ? updatedRecord : t);
+        }
+        return [updatedRecord, ...prev];
+      });
 
       // 5b. Update Patient treatment count
       if (!isEdit && patient?.id) {
@@ -311,25 +314,27 @@ setTreatments(prev => {
         setAppointments(prev => prev.map(a =>
           a.id === finalAppointmentId ? { ...a, status: 'completed', treatmentId: cid } : a
         ));
-        // Link in background
         linkAppointmentToTreatment(finalAppointmentId, cid).catch(() => {});
       }
 
-      // 5d. Optimistic Payment sync
-      if (!isEdit && dataToSave.paymentAmount > 0 && !existingPayment) {
-        const syntheticPayment = {
-          id: `temp_${cid}`,
-          treatmentId: cid,
-          patientId: patient.id,
-          patient_id: patient.id,
-          appointmentId: finalAppointmentId,
-          amount: dataToSave.paymentAmount,
-          payment_method: dataToSave.payment_method,
-          payment_status: 'completed',
-          payment_date: form.date,
-          _isOptimistic: true,
-        };
-        setPayments(prev => [syntheticPayment, ...prev]);
+      // ✅ שינוי 2: תשלום נשמר גם בעריכה וגם ביצירה חדשה
+      if (form.createPayment && dataToSave.paymentAmount > 0 && !existingPayment) {
+        try {
+          const newPayment = await createPayment({
+            treatmentId: cid,
+            patientId: patient.id,
+            patient_id: patient.id,
+            appointmentId: finalAppointmentId,
+            amount: dataToSave.paymentAmount,
+            payment_method: dataToSave.payment_method,
+            payment_status: 'completed',
+            payment_date: form.date,
+            notes: dataToSave.payment_notes || '',
+          });
+          setPayments(prev => [newPayment, ...prev]);
+        } catch (payErr) {
+          console.warn('[TreatmentDialog] Payment creation failed (non-fatal):', payErr);
+        }
       }
 
       // 6. Background reconcile
@@ -418,13 +423,51 @@ setTreatments(prev => {
             <div className="border-t border-gray-100 pt-4">
               <p className="text-xs font-semibold text-gray-400 uppercase mb-3">שדות קליניים (אופציונלי)</p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
+
+                {/* ── תחום קליני — multi-select buttons ── */}
+                <div className="sm:col-span-3">
                   <label className="label">תחום קליני</label>
-                  <select className="input" value={form.clinicalDomain} onChange={set('clinicalDomain')}>
-                    <option value="">— בחר תחום —</option>
-                    {CLINICAL_DOMAINS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-                  </select>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {CLINICAL_DOMAINS.map(domain => {
+                      const selected = Array.isArray(form.clinicalDomain)
+                        ? form.clinicalDomain.includes(domain.value)
+                        : form.clinicalDomain === domain.value;
+                      return (
+                        <button
+                          key={domain.value}
+                          type="button"
+                          onClick={() => {
+                            setForm(f => {
+                              const current = Array.isArray(f.clinicalDomain)
+                                ? f.clinicalDomain
+                                : f.clinicalDomain ? [f.clinicalDomain] : [];
+                              const updated = current.includes(domain.value)
+                                ? current.filter(v => v !== domain.value)
+                                : [...current, domain.value];
+                              return { ...f, clinicalDomain: updated };
+                            });
+                          }}
+                          className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                            selected
+                              ? 'bg-teal-500 text-white border-teal-500'
+                              : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'
+                          }`}
+                        >
+                          {domain.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {Array.isArray(form.clinicalDomain) && form.clinicalDomain.includes('other') && (
+                    <input
+                      className="input mt-2"
+                      placeholder="פרט תחום קליני..."
+                      value={form.clinicalDomainOther || ''}
+                      onChange={e => setForm(f => ({ ...f, clinicalDomainOther: e.target.value }))}
+                    />
+                  )}
                 </div>
+
                 <div>
                   <label className="label">שיתוף פעולה (1–5)</label>
                   <select className="input" value={form.cooperationLevel} onChange={set('cooperationLevel')}>
@@ -570,8 +613,8 @@ setTreatments(prev => {
           onSave={() => {
             setPaymentModalOpen(false);
             if (currentTreatmentId) {
-              getPaymentsByTreatment(currentTreatmentId).then(pmts => { 
-                if (pmts?.length > 0) setExistingPayment(pmts[0]); 
+              getPaymentsByTreatment(currentTreatmentId).then(pmts => {
+                if (pmts?.length > 0) setExistingPayment(pmts[0]);
               });
             }
           }}
