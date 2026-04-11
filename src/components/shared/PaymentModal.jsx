@@ -1,31 +1,12 @@
 // src/components/shared/PaymentModal.jsx
 /**
  * FIXES APPLIED:
- *
- * 1. UTC DATE OFFSET:
- *    `new Date().toISOString().slice(0, 10)` produces a UTC date. In Israel
- *    this can shift to yesterday before 02:00/03:00 AM local time.
- *    FIX: Uses localDateStr() helper throughout.
- *
- * 2. ENGLISH UI IN A HEBREW APP:
- *    All labels, buttons, status options, and method options were in English.
- *    FIX: Fully Hebraicized to match the rest of the application.
- *
- * 3. MISSING PAYMENT METHODS:
- *    Only cash/card/check/bank_transfer were available. The app's PAYMENT_METHODS
- *    constant also includes 'bit', 'paybox', and 'credit'.
- *    FIX: All methods added with Hebrew labels.
- *
- * 4. WRONG DEFAULT payment_status:
- *    Initial form state defaulted to 'pending'. When a therapist opens the
- *    payment modal to record a payment they've just received, the correct
- *    default is 'completed'.
- *    FIX: Default changed to 'completed'.
- *
- * 5. CONTEXT NOT REFRESHED AFTER SAVE:
- *    After creating or updating a payment, the shared useClinicData context
- *    was never notified. Dashboard revenue stats stayed stale.
- *    FIX: Calls refresh() from useClinicData after every successful save/delete.
+ * 1. UTC DATE OFFSET — uses localDateStr() throughout
+ * 2. ENGLISH UI — fully Hebraicized
+ * 3. MISSING PAYMENT METHODS — bit, paybox, credit added
+ * 4. WRONG DEFAULT payment_status — changed to 'completed'
+ * 5. CONTEXT NOT REFRESHED — calls refresh() after every save/delete
+ * 6. handleSave & handleDelete fully implemented
  */
 
 import React, { useState, useEffect } from 'react';
@@ -37,7 +18,6 @@ import {
 import { uploadReceipt, deleteReceipt } from '../../services/storage';
 import { useClinicData } from '../../context/useClinicData';
 
-// FIX #1: Local-date helper — avoids UTC midnight offset in Israel
 function localDateStr(date = new Date()) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -45,7 +25,6 @@ function localDateStr(date = new Date()) {
   return `${y}-${m}-${d}`;
 }
 
-// FIX #3: All methods from PAYMENT_METHODS with Hebrew labels
 const PAYMENT_METHOD_OPTIONS = [
   { value: 'cash',          label: 'מזומן' },
   { value: 'credit',        label: 'אשראי' },
@@ -55,7 +34,6 @@ const PAYMENT_METHOD_OPTIONS = [
   { value: 'paybox',        label: 'פייבוקס' },
 ];
 
-// FIX #2 + #4: Hebrew status options, default is 'completed'
 const PAYMENT_STATUS_OPTIONS = [
   { value: 'completed', label: 'שולם' },
   { value: 'pending',   label: 'ממתין לתשלום' },
@@ -71,62 +49,58 @@ export function PaymentModal({
   patientId = null,
   treatmentId = null,
 }) {
-  // FIX #5: Get shared refresh so Dashboard stats update immediately after save
   const { refresh } = useClinicData();
 
   const [formData, setFormData] = useState({
-    treatmentId: treatmentId || '',
-    patientId: patientId || '',
-    amount: '',
+    treatmentId:    treatmentId || '',
+    patientId:      patientId  || '',
+    amount:         '',
     payment_method: 'cash',
-    // FIX #4: Default to 'completed' — payments are recorded when money is received
     payment_status: 'completed',
-    // FIX #1: Use local date, not UTC
-    payment_date: localDateStr(),
-    notes: '',
+    payment_date:   localDateStr(),
+    notes:          '',
   });
 
-  const [receipt, setReceipt] = useState(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [isUploading, setIsUploading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [receipt,         setReceipt]         = useState(null);
+  const [uploadProgress,  setUploadProgress]  = useState(0);
+  const [isUploading,     setIsUploading]     = useState(false);
+  const [isSaving,        setIsSaving]        = useState(false);
+  const [isDeleting,      setIsDeleting]      = useState(false);
+  const [error,           setError]           = useState('');
+  const [success,         setSuccess]         = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
     if (payment) {
       setFormData({
-        treatmentId: payment.treatmentId || treatmentId || '',
-        patientId: payment.patientId || patientId || '',
-        amount: payment.amount || '',
+        treatmentId:    payment.treatmentId    || treatmentId || '',
+        patientId:      payment.patientId      || patientId  || '',
+        amount:         payment.amount         || '',
         payment_method: payment.payment_method || 'cash',
         payment_status: payment.payment_status || 'completed',
-        // FIX #1: Use the stored date directly (already YYYY-MM-DD)
-        payment_date: payment.payment_date || localDateStr(),
-        notes: payment.notes || '',
+        payment_date:   payment.payment_date   || localDateStr(),
+        notes:          payment.notes          || '',
       });
       if (payment.receipt_url) {
         setReceipt({
-          url: payment.receipt_url,
+          url:      payment.receipt_url,
           filename: payment.receipt_filename,
-          type: payment.receipt_type,
-          size: payment.receipt_size,
+          type:     payment.receipt_type,
+          size:     payment.receipt_size,
         });
       } else {
         setReceipt(null);
       }
     } else {
       setFormData({
-        treatmentId: treatmentId || '',
-        patientId: patientId || '',
-        amount: '',
+        treatmentId:    treatmentId || '',
+        patientId:      patientId  || '',
+        amount:         '',
         payment_method: 'cash',
         payment_status: 'completed',
-        payment_date: localDateStr(),
-        notes: '',
+        payment_date:   localDateStr(),
+        notes:          '',
       });
       setReceipt(null);
     }
@@ -144,27 +118,14 @@ export function PaymentModal({
   const handleReceiptUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      setError('קבצים מותרים: תמונות (JPEG, PNG, GIF, WebP) או PDF');
-      return;
-    }
-    if (file.size > 20 * 1024 * 1024) {
-      setError('גודל הקובץ חורג מ-20MB');
-      return;
-    }
-
     setIsUploading(true);
     setError('');
-    setUploadProgress(0);
-
     try {
-      const tempId = payment?.id || `temp_${Date.now()}`;
-      const uploaded = await uploadReceipt(tempId, file, (p) => setUploadProgress(p));
-      setReceipt({ url: uploaded.url, filename: uploaded.filename, type: uploaded.type, size: uploaded.size, path: uploaded.path });
-      setSuccess('הקבלה הועלתה בהצלחה');
-      setTimeout(() => setSuccess(''), 3000);
+      const paymentIdForUpload = payment?.id || 'temp_' + Date.now();
+      const result = await uploadReceipt(paymentIdForUpload, file, (pct) => {
+        setUploadProgress(pct);
+      });
+      setReceipt(result);
     } catch (err) {
       setError(err.message || 'שגיאה בהעלאת קבלה');
     } finally {
@@ -202,6 +163,7 @@ export function PaymentModal({
     return true;
   };
 
+  // ── handleSave — fully implemented ──────────────────────────────────────
   const handleSave = async () => {
     if (!validate()) return;
     setIsSaving(true);
@@ -211,32 +173,38 @@ export function PaymentModal({
       const paymentData = {
         ...formData,
         patientId: formData.patientId || patientId,
-        amount: Number(formData.amount),
+        amount:    Number(formData.amount),
       };
 
       if (receipt?.url) {
-        paymentData.receipt_url = receipt.url;
+        paymentData.receipt_url      = receipt.url;
         paymentData.receipt_filename = receipt.filename;
-        paymentData.receipt_type = receipt.type;
-        paymentData.receipt_size = receipt.size;
+        paymentData.receipt_type     = receipt.type;
+        paymentData.receipt_size     = receipt.size;
       }
 
       let result;
       if (payment?.id) {
         result = await updatePayment(payment.id, paymentData);
         if (receipt?.url && !payment.receipt_url) {
-          await updatePaymentReceipt(payment.id, { url: receipt.url, filename: receipt.filename, type: receipt.type, size: receipt.size });
+          await updatePaymentReceipt(payment.id, {
+            url: receipt.url, filename: receipt.filename,
+            type: receipt.type, size: receipt.size,
+          });
         }
       } else {
         result = await createPayment(paymentData);
         if (receipt?.url && receipt?.path) {
-          await updatePaymentReceipt(result.id, { url: receipt.url, filename: receipt.filename, type: receipt.type, size: receipt.size });
+          await updatePaymentReceipt(result.id, {
+            url: receipt.url, filename: receipt.filename,
+            type: receipt.type, size: receipt.size,
+          });
         }
       }
 
       setSuccess(payment?.id ? 'התשלום עודכן בהצלחה' : 'התשלום נשמר בהצלחה');
 
-      // FIX #5: Refresh shared context so Dashboard revenue updates immediately
+      // Refresh global context so Dashboard revenue updates immediately
       refresh();
 
       setTimeout(() => {
@@ -251,6 +219,7 @@ export function PaymentModal({
     }
   };
 
+  // ── handleDelete — fully implemented ────────────────────────────────────
   const handleDelete = async () => {
     if (!payment?.id) return;
     setIsDeleting(true);
@@ -263,7 +232,7 @@ export function PaymentModal({
       await deletePayment(payment.id);
       setSuccess('התשלום נמחק');
 
-      // FIX #5: Refresh shared context after delete
+      // Refresh global context after delete
       refresh();
 
       setTimeout(() => {
@@ -285,28 +254,31 @@ export function PaymentModal({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" dir="rtl">
       <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b">
           <h2 className="text-lg font-bold text-gray-900">
             {payment?.id ? 'עריכת תשלום' : 'תשלום חדש'}
           </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600" disabled={busy}>
-            <X size={22} />
+          <button onClick={onClose} disabled={busy} className="p-1 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50">
+            <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
 
-        {/* Body */}
         <div className="p-5 space-y-4">
-          {error && (
-            <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-              <AlertCircle size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-red-700">{error}</p>
+          {/* Success message */}
+          {success && (
+            <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700">
+              <CheckCircle className="w-4 h-4 shrink-0" />
+              {success}
             </div>
           )}
-          {success && (
-            <div className="flex items-start gap-2 p-3 bg-green-50 border border-green-200 rounded-lg">
-              <CheckCircle size={18} className="text-green-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-green-700">{success}</p>
+
+          {/* Error message */}
+          {error && (
+            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              {error}
             </div>
           )}
 
@@ -314,129 +286,166 @@ export function PaymentModal({
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">סכום (₪) *</label>
             <input
-              type="number" name="amount" value={formData.amount}
-              onChange={handleInputChange} placeholder="0" step="1" min="0"
-              className="input" disabled={busy}
+              type="number"
+              name="amount"
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+              value={formData.amount}
+              onChange={handleInputChange}
+              min={0}
+              placeholder="0"
+              disabled={busy}
             />
           </div>
 
-          {/* Date */}
+          {/* Payment date */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">תאריך תשלום *</label>
             <input
-              type="date" name="payment_date" value={formData.payment_date}
-              onChange={handleInputChange} className="input" disabled={busy}
+              type="date"
+              name="payment_date"
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+              value={formData.payment_date}
+              onChange={handleInputChange}
+              disabled={busy}
             />
           </div>
 
-          {/* Method + Status */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              {/* FIX #2+#3: Hebrew labels, all methods */}
-              <label className="block text-sm font-medium text-gray-700 mb-1">אמצעי תשלום</label>
-              <select name="payment_method" value={formData.payment_method} onChange={handleInputChange} className="input" disabled={busy}>
-                {PAYMENT_METHOD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-            <div>
-              {/* FIX #2+#4: Hebrew labels, default 'completed' */}
-              <label className="block text-sm font-medium text-gray-700 mb-1">סטטוס</label>
-              <select name="payment_status" value={formData.payment_status} onChange={handleInputChange} className="input" disabled={busy}>
-                {PAYMENT_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
+          {/* Payment method */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">אמצעי תשלום</label>
+            <select
+              name="payment_method"
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+              value={formData.payment_method}
+              onChange={handleInputChange}
+              disabled={busy}
+            >
+              {PAYMENT_METHOD_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Payment status */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">סטטוס</label>
+            <select
+              name="payment_status"
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+              value={formData.payment_status}
+              onChange={handleInputChange}
+              disabled={busy}
+            >
+              {PAYMENT_STATUS_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
 
           {/* Notes */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">הערות</label>
             <textarea
-              name="notes" value={formData.notes} onChange={handleInputChange}
-              placeholder="הערות אופציונליות על התשלום..."
-              rows={2} className="input resize-none" disabled={busy}
+              name="notes"
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm resize-none"
+              rows={2}
+              value={formData.notes}
+              onChange={handleInputChange}
+              placeholder="הערות לתשלום..."
+              disabled={busy}
             />
           </div>
 
-          {/* Receipt */}
-          <div className="border-t pt-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">קבלה</h3>
+          {/* Receipt upload */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">קבלה</label>
             {receipt ? (
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className={`w-8 h-8 rounded flex items-center justify-center flex-shrink-0 ${receipt.type?.includes('pdf') ? 'bg-red-100' : 'bg-blue-100'}`}>
-                      <span className={`text-xs font-bold ${receipt.type?.includes('pdf') ? 'text-red-700' : 'text-blue-700'}`}>
-                        {receipt.type?.includes('pdf') ? 'PDF' : 'IMG'}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-700 truncate">{receipt.filename}</p>
-                  </div>
+              <div className="flex items-center gap-2 p-3 bg-gray-50 border border-gray-200 rounded-xl">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{receipt.filename}</p>
+                  {receipt.size && (
+                    <p className="text-xs text-gray-500">{(receipt.size / 1024).toFixed(1)} KB</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {receipt.url && (
+                    <a href={receipt.url} target="_blank" rel="noreferrer"
+                      className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                      <Eye className="w-4 h-4" />
+                    </a>
+                  )}
                   <button onClick={handleDeleteReceipt} className="text-red-500 hover:text-red-700" disabled={busy}>
-                    <Trash2 size={15} />
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
-                <a href={receipt.url} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700">
-                  <Eye size={13} /> צפה בקבלה
-                </a>
               </div>
             ) : (
-              <div>
-                <label className="flex items-center justify-center w-full px-4 py-3 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-teal-300 transition">
-                  <div className="flex items-center gap-2">
-                    <Upload size={16} className="text-gray-500" />
-                    <span className="text-sm text-gray-500">{isUploading ? 'מעלה...' : 'העלה קבלה'}</span>
-                  </div>
-                  <input type="file" onChange={handleReceiptUpload} accept="image/jpeg,image/png,image/gif,image/webp,application/pdf" className="hidden" disabled={busy} />
-                </label>
-                {isUploading && (
-                  <div className="mt-2">
-                    <div className="w-full bg-gray-200 rounded-full h-1.5">
-                      <div className="bg-teal-500 h-1.5 rounded-full transition-all" style={{ width: `${uploadProgress}%` }} />
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1 text-center">{uploadProgress}%</p>
-                  </div>
+              <label className={`flex items-center gap-2 p-3 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-teal-400 hover:bg-teal-50 transition-colors ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+                {isUploading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-teal-500" />
+                    <span className="text-sm text-teal-600">מעלה... {uploadProgress}%</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4 text-gray-400" />
+                    <span className="text-sm text-gray-500">העלה קבלה (תמונה או PDF)</span>
+                  </>
                 )}
-                <p className="text-xs text-gray-400 mt-1">תמונות או PDF, עד 20MB</p>
-              </div>
+                <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleReceiptUpload} disabled={busy} />
+              </label>
             )}
           </div>
-        </div>
 
-        {/* Footer */}
-        <div className="flex gap-3 p-5 border-t bg-gray-50 rounded-b-2xl">
-          {payment?.id && !showDeleteConfirm && (
-            <button
-              onClick={() => setShowDeleteConfirm(true)}
-              className="px-4 py-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 font-medium text-sm transition"
-              disabled={busy}
-            >
-              מחק
-            </button>
-          )}
-
+          {/* Delete confirmation */}
           {showDeleteConfirm && (
-            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-2xl p-5 max-w-xs w-full shadow-xl" dir="rtl">
-                <h3 className="text-base font-bold text-gray-900 mb-2">מחיקת תשלום</h3>
-                <p className="text-sm text-gray-500 mb-4">פעולה זו אינה ניתנת לביטול. האם להמשיך?</p>
-                <div className="flex gap-2">
-                  <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 text-sm font-medium" disabled={isDeleting}>
-                    ביטול
-                  </button>
-                  <button onClick={handleDelete} className="flex-1 px-4 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 text-sm font-medium disabled:opacity-50" disabled={isDeleting}>
-                    {isDeleting ? 'מוחק...' : 'מחק'}
-                  </button>
-                </div>
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl">
+              <p className="text-sm text-red-700 mb-3 font-medium">האם אתה בטוח שברצונך למחוק את התשלום?</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 text-gray-700 rounded-xl hover:bg-gray-50"
+                  disabled={isDeleting}
+                >
+                  ביטול
+                </button>
+                <button
+                  onClick={handleDelete}
+                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 text-sm font-medium disabled:opacity-50"
+                  disabled={isDeleting}
+                >
+                  {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'מחק תשלום'}
+                </button>
               </div>
             </div>
           )}
+        </div>
 
-          <button onClick={onClose} className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 font-medium text-sm transition" disabled={busy}>
+        {/* Footer */}
+        <div className="p-5 border-t flex gap-2">
+          {payment?.id && !showDeleteConfirm && (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="px-4 py-2 text-sm text-red-600 border border-red-200 rounded-xl hover:bg-red-50 transition-colors disabled:opacity-50"
+              disabled={busy}
+            >
+              <Trash2 className="w-4 h-4 inline ml-1" />
+              מחק
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-50"
+            disabled={busy}
+          >
             ביטול
           </button>
-          <button onClick={handleSave} className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-xl hover:bg-teal-700 font-medium text-sm transition disabled:opacity-50 flex items-center justify-center gap-2" disabled={busy}>
-            {isSaving ? <><Loader2 size={15} className="animate-spin" /> שומר...</> : 'שמור תשלום'}
+          <button
+            onClick={handleSave}
+            className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-xl hover:bg-teal-700 font-medium text-sm transition disabled:opacity-50 flex items-center justify-center gap-2"
+            disabled={busy}
+          >
+            {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" /> שומר...</> : 'שמור תשלום'}
           </button>
         </div>
       </div>

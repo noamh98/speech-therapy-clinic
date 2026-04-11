@@ -6,9 +6,11 @@ const COLLECTION = 'templates';
 
 export async function getTemplates() {
   const user = auth.currentUser;
+  if (!user?.uid) throw new Error('User not authenticated');
+
   const q = query(
     collection(db, COLLECTION),
-    where('therapist_email', '==', user?.email || ''),
+    where('ownerId', '==', user.uid),
     orderBy('name', 'asc')
   );
   const snap = await getDocs(q);
@@ -17,11 +19,14 @@ export async function getTemplates() {
 
 export async function createTemplate(data) {
   const user = auth.currentUser;
+  if (!user?.uid) throw new Error('User not authenticated');
+
   const now = serverTimestamp();
   const ref = await addDoc(collection(db, COLLECTION), {
     ...data,
-    therapist_email: user?.email || '',
-    created_by: user?.email || '',
+    ownerId: user.uid,
+    email: user.email,  // keep for reference but don't filter by it
+    created_by_uid: user.uid,
     created_date: now,
     updated_date: now,
     active: true,

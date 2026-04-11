@@ -85,15 +85,12 @@ export const TEMPLATE_TYPES = [
 // ─── NEW: Clinical structured fields ─────────────────────────────────────────
 
 export const CLINICAL_DOMAINS = [
-  { value: '',                  label: '— בחר תחום —' },
-  { value: 'speech_sounds',     label: 'צלילי דיבור / פונולוגיה' },
-  { value: 'language',          label: 'שפה' },
-  { value: 'fluency',           label: 'שטף / גמגום' },
-  { value: 'voice',             label: 'קול' },
-  { value: 'swallowing',        label: 'בליעה' },
-  { value: 'aac',               label: 'תקשורת תומכת (AAC)' },
-  { value: 'social_pragmatics', label: 'פרגמטיקה חברתית' },
-  { value: 'cognitive_comm',    label: 'תקשורת קוגניטיבית' },
+  { value: 'speech', label: 'דיבור' },
+  { value: 'language', label: 'שפה' },
+  { value: 'reading_writing', label: 'קריאה/כתיבה' },
+  { value: 'swallowing', label: 'בליעה' },
+  { value: 'oral_motor', label: 'תפקודי פה / דחיקת לשון' },
+  { value: 'other', label: 'אחר' },
 ];
 
 export const COOPERATION_LEVELS = [

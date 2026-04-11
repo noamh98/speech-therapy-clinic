@@ -70,7 +70,7 @@ export function AuthProvider({ children }) {
 
   const resetPassword = (email) => sendPasswordResetEmail(auth, email);
 
-  const isAdmin = profile?.role === 'admin' || user?.email === ADMIN_EMAIL;
+  const isAdmin = profile?.role === 'admin';
 
   return (
     <AuthContext.Provider value={{

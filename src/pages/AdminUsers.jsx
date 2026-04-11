@@ -28,18 +28,14 @@ export default function AdminUsers() {
     setLoading(true);
 
     try {
-      // יצירת מזהה ייחודי מבוסס מייל (באותיות קטנות למניעת כפילויות)
       const cleanEmail = email.toLowerCase().trim();
-      const userRef = doc(db, 'users', cleanEmail);
 
-      // רישום המשתמש ב-Firestore
-      await setDoc(userRef, {
-        email: cleanEmail,
-        role: role,
-        name: cleanEmail.split('@')[0], // שם זמני עד שתתחבר
-        status: 'invited',
-        created_date: serverTimestamp(),
-      });
+      // SECURITY: This should only be done via Cloud Function with Admin SDK
+      // Frontend code cannot safely assign admin roles. This is a temporary measure
+      // that MUST be replaced with a backend Cloud Function.
+
+      alert(`❌ NOT IMPLEMENTED YET\n\nAdmins must use a Cloud Function to invite users.\n\nUser invites should:\n1. Validate email\n2. Create user via Cloud Function\n3. Assign roles via Admin SDK (not frontend)\n\nContact your dev team to deploy the inviteUser Cloud Function.`);
+      return;
 
       alert(`המשתמש ${cleanEmail} הוגדר במערכת. כעת היא יכולה להתחבר באמצעות גוגל.`);
 

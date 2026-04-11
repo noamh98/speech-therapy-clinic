@@ -8,9 +8,11 @@ import {
   AlertCircle, Lightbulb, ChevronDown, Brain
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
 import { motion, AnimatePresence } from 'framer-motion';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { localDateStr, formatCurrency } from '../utils/formatters';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../services/firebase';
 
 // ─── Suggested prompts (grouped by category) ─────────────────────────────
 const SUGGESTED_GROUPS = [
@@ -106,54 +108,23 @@ ${pendingRevenue > 0 ? `\nפירוט חובות חלקי:\n${pendingList}` : ''}
 - **תובנות:** אם שואלים על "סטטוס הקליניקה", סכם את מצב התורים והתשלומים (שולמו מול ממתינים).`;
 }
 
-// ─── Google Gemini API call ──────────────────────────────────────────────────
+// ─── Google Gemini API call via Cloud Function ───────────────────────────────
+// SECURITY: API calls go through backend Cloud Function which keeps API key secure
 async function callGemini(messages, systemPrompt) {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-
-  if (!apiKey) {
-    throw new Error('VITE_GEMINI_API_KEY is not set in .env.');
-  }
-
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-3-flash-preview',
-      systemInstruction: systemPrompt,
+    const callGeminiFunction = httpsCallable(functions, 'callGemini');
+    const result = await callGeminiFunction({
+      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      systemPrompt: systemPrompt,
     });
 
-    const conversationHistory = messages.map(msg => ({
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.content }],
-    }));
-
-    let historyToUse = conversationHistory.filter((msg, idx) => {
-      if (idx === 0 && msg.role === 'model') return false;
-      return true;
-    });
-
-    if (historyToUse.length > 0 && historyToUse[0].role === 'model') {
-      historyToUse = historyToUse.slice(1);
-    }
-
-    const chat = model.startChat({
-      history: historyToUse.slice(0, -1),
-    });
-
-    const lastMessage = historyToUse[historyToUse.length - 1];
-    if (!lastMessage || lastMessage.role !== 'user') {
-      throw new Error('Last message must be from user');
-    }
-
-    const result = await chat.sendMessage(lastMessage.parts[0].text);
-    const responseText = result.response.text();
-
-    if (!responseText) {
+    if (!result.data?.reply) {
       throw new Error('Empty response from Gemini');
     }
 
-    return responseText;
+    return result.data.reply;
   } catch (err) {
-    console.error('Gemini API error:', err);
+    console.error('Gemini call error:', err);
     throw new Error(err.message || 'Failed to get response from Gemini API');
   }
 }
@@ -186,6 +157,7 @@ export default function AIAssistant() {
   const [copiedIdx, setCopiedIdx] = useState(null);
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [activeGroup, setActiveGroup] = useState(0);
+  const [lastMessageTime, setLastMessageTime] = useState(0);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -211,6 +183,14 @@ export default function AIAssistant() {
   const send = useCallback(async (text) => {
     const msg = (text || input).trim();
     if (!msg || loading) return;
+
+    // SECURITY: Rate limiting — max 1 message per 2 seconds
+    const now = Date.now();
+    if (now - lastMessageTime < 2000) {
+      setError('⏳ אנא חכה 2 שניות בין הודעות');
+      return;
+    }
+    setLastMessageTime(now);
 
     setInput('');
     setError(null);
@@ -238,7 +218,7 @@ export default function AIAssistant() {
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [input, loading, messages, systemPrompt]);
+  }, [input, loading, messages, systemPrompt, lastMessageTime]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -376,7 +356,7 @@ export default function AIAssistant() {
               >
                 {m.role === 'assistant' ? (
                   <div className="prose prose-sm max-w-none prose-headings:text-gray-900 prose-strong:text-gray-900 prose-code:bg-gray-100 prose-code:px-1 prose-code:rounded">
-                    <ReactMarkdown>{m.content}</ReactMarkdown>
+                    <ReactMarkdown rehypePlugins={[rehypeSanitize]}>{m.content}</ReactMarkdown>
                   </div>
                 ) : (
                   <span>{m.content}</span>
