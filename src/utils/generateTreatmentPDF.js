@@ -8,28 +8,28 @@ export function generateTreatmentPDF({ treatment, patient, clinicName = '' }) {
   const p  = patient    || {};
 
   const domainLabels = {
-    speech:     'דיבור ושפה',
-    voice:      'קול',
-    fluency:    'שטף',
-    swallowing: 'בליעה',
-    cognition:  'קוגניציה',
-    aac:        'תקשורת תומכת (AAC)',
-    other:      'אחר',
+    speech:          'דיבור',
+    language:        'שפה',
+    reading_writing: 'קריאה/כתיבה',
+    swallowing:      'בליעה',
+    oral_motor:      'תפקודי פה / דחיקת לשון',
+    communication:   'תקשורת',
+    play:            'משחק',
+    other:           'אחר',
   };
 
   const cooperationLabels = {
-    excellent: 'מצוין',
-    good:      'טוב',
-    fair:      'בינוני',
-    poor:      'נמוך',
+    1: 'נמוך מאוד (1)',
+    2: 'נמוך (2)',
+    3: 'בינוני (3)',
+    4: 'טוב (4)',
+    5: 'מצוין (5)',
   };
 
   const progressLabels = {
-    significant: 'התקדמות משמעותית',
-    moderate:    'התקדמות מתונה',
-    minimal:     'התקדמות מינימלית',
-    plateau:     'רמה קבועה',
-    regression:  'רגרסיה',
+    improving: '↑ שיפור',
+    stable:    '→ יציב',
+    regressed: '↓ נסיגה',
   };
 
   const domains = Array.isArray(t.clinicalDomain)

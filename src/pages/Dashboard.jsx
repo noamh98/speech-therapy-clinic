@@ -23,11 +23,12 @@ import { useAuth } from '../context/AuthContext';
 import { useClinicData } from '../context/useClinicData';
 import { StatCard, Card, DashboardSkeleton } from '../components/ui';
 import TreatmentDialog from '../components/shared/TreatmentDialog';
+import TreatmentViewModal from '../components/shared/TreatmentViewModal';
 import { formatDate, formatCurrency, localDateStr } from '../utils/formatters';
 import {
   Users, DollarSign, Activity, TrendingUp,
   Calendar, ClipboardList, BarChart2, Clock, Plus,
-  ArrowLeft, CheckCircle2, AlertCircle, Pencil,
+  ArrowLeft, CheckCircle2, AlertCircle, Pencil, Eye,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -45,13 +46,15 @@ export default function Dashboard() {
     todayAppointments,
     patientMap,
     docStatusMap,
-    paymentStats,       // ← from context useMemo, always fresh
+    treatmentsByApptId,
+    paymentStats,
     loading,
     error,
     refresh,
   } = useClinicData();
 
   const [treatmentDialog, setTreatmentDialog] = useState(null);
+  const [viewDialog,      setViewDialog]      = useState(null);
 
   const today = localDateStr();
   const in30  = localDateStr(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
@@ -210,6 +213,7 @@ export default function Dashboard() {
                   appt={appt}
                   patient={patientMap[appt.patient_id]}
                   onDocument={() => setTreatmentDialog(appt)}
+                  onView={() => setViewDialog(appt)}
                   docStatus={docStatusMap[appt.id]}
                   index={idx}
                 />
@@ -242,6 +246,7 @@ export default function Dashboard() {
                   appt={appt}
                   patient={patientMap[appt.patient_id]}
                   onDocument={() => setTreatmentDialog(appt)}
+                  onView={() => setViewDialog(appt)}
                   docStatus={docStatusMap[appt.id]}
                   index={idx}
                   showDate
@@ -278,7 +283,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Treatment Dialog — FIX 2: pass treatmentId + appointmentId */}
+      {/* Treatment Dialog — edit / create */}
       {treatmentDialog && (
         <TreatmentDialog
           open={!!treatmentDialog}
@@ -291,12 +296,25 @@ export default function Dashboard() {
           onSaved={() => { setTreatmentDialog(null); refresh(); }}
         />
       )}
+
+      {/* Treatment View Modal — read-only */}
+      <TreatmentViewModal
+        open={!!viewDialog}
+        onClose={() => setViewDialog(null)}
+        treatment={viewDialog ? treatmentsByApptId[viewDialog.id] : null}
+        patient={viewDialog ? patientMap[viewDialog.patient_id] : null}
+        onEdit={() => {
+          const a = viewDialog;
+          setViewDialog(null);
+          setTreatmentDialog(a);
+        }}
+      />
     </div>
   );
 }
 
 // ─── Appointment Row ──────────────────────────────────────────────────────────
-function AppointmentRow({ appt, patient, onDocument, docStatus, index = 0, showDate = false }) {
+function AppointmentRow({ appt, patient, onDocument, onView, docStatus, index = 0, showDate = false }) {
   const isDocumented = docStatus === 'documented';
 
   return (
@@ -334,16 +352,35 @@ function AppointmentRow({ appt, patient, onDocument, docStatus, index = 0, showD
         </div>
       </div>
 
-      <button
-        onClick={onDocument}
-        className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-all flex-shrink-0
-          ${isDocumented
-            ? 'opacity-0 group-hover:opacity-100 text-blue-600 bg-blue-50 hover:bg-blue-100'
-            : 'text-teal-600 bg-teal-50 hover:bg-teal-100'
-          }`}
-      >
-        {isDocumented ? <><Pencil className="w-3.5 h-3.5" /> ערוך</> : <><Plus className="w-3.5 h-3.5" /> תעד</>}
-      </button>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        {isDocumented ? (
+          <>
+            {/* View — always visible for documented */}
+            <button
+              onClick={onView}
+              className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full transition-all text-teal-600 bg-teal-50 hover:bg-teal-100"
+              title="צפה בתיעוד"
+            >
+              <Eye className="w-3.5 h-3.5" /> צפייה
+            </button>
+            {/* Edit — hover only */}
+            <button
+              onClick={onDocument}
+              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full transition-all text-blue-600 bg-blue-50 hover:bg-blue-100"
+              title="ערוך תיעוד"
+            >
+              <Pencil className="w-3.5 h-3.5" /> ערוך
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={onDocument}
+            className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full transition-all text-teal-600 bg-teal-50 hover:bg-teal-100"
+          >
+            <Plus className="w-3.5 h-3.5" /> תעד
+          </button>
+        )}
+      </div>
     </motion.div>
   );
 }

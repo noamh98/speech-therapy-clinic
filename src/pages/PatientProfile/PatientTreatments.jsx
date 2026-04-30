@@ -24,9 +24,10 @@ import { getTreatmentById } from '../../services/treatments';
 import { PaymentHistory } from '../../components/shared/PaymentHistory';
 import { PaymentModal } from '../../components/shared/PaymentModal';
 import { Badge, EmptyState, ConfirmDialog, Spinner } from '../../components/ui';
-import { Calendar, Plus, Pencil, Trash2, FileText, DollarSign } from 'lucide-react';
+import { Calendar, Plus, Pencil, Trash2, FileText, DollarSign, Eye } from 'lucide-react';
 import { formatDate, localDateStr } from '../../utils/formatters';
 import TreatmentDialog from '../../components/shared/TreatmentDialog';
+import TreatmentViewModal from '../../components/shared/TreatmentViewModal';
 
 export default function PatientAppointments({ patient }) {
   const { user } = useAuth();
@@ -41,6 +42,9 @@ export default function PatientAppointments({ patient }) {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedTreatmentForPayment, setSelectedTreatmentForPayment] = useState(null);
   const [paymentRefreshKey, setPaymentRefreshKey] = useState(0);
+  const [viewModalOpen, setViewModalOpen] = useState(false);
+  const [viewTreatment, setViewTreatment] = useState(null);
+  const [viewingAppt, setViewingAppt] = useState(null);
 
   useEffect(() => {
     if (!user?.uid || !patient?.id) {
@@ -70,26 +74,33 @@ export default function PatientAppointments({ patient }) {
     }
   }
 
+  const fetchTreatment = async (appt) => {
+    if (!appt.treatmentId) return null;
+    setIsFetching(true);
+    try {
+      const t = await getTreatmentById(appt.treatmentId);
+      if (t && t.ownerId !== user.uid) throw new Error('Access denied');
+      return t;
+    } catch (err) {
+      setError(err.message || 'שגיאה בטעינת הטיפול');
+      return null;
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  const handleViewTreatment = async (appt) => {
+    const t = await fetchTreatment(appt);
+    if (!t) return;
+    setViewTreatment(t);
+    setViewingAppt(appt);
+    setViewModalOpen(true);
+  };
+
   const handleOpenTreatment = async (appt) => {
     setSelectedAppt(appt);
-    // FIX #1: Read appt.treatmentId (camelCase) — was appt.treatment_id (always undefined)
-    if (appt.treatmentId) {
-      setIsFetching(true);
-      try {
-        const fullTreatment = await getTreatmentById(appt.treatmentId);
-        if (fullTreatment && fullTreatment.ownerId !== user.uid) {
-          throw new Error('Access denied: treatment does not belong to you');
-        }
-        setSelectedTreatment(fullTreatment);
-      } catch (err) {
-        console.error('[PatientTreatments] Error loading treatment:', err);
-        setError(err.message || 'Failed to load treatment');
-      } finally {
-        setIsFetching(false);
-      }
-    } else {
-      setSelectedTreatment(null);
-    }
+    const t = await fetchTreatment(appt);
+    setSelectedTreatment(t || null);
     setTreatDialogOpen(true);
   };
 
@@ -183,21 +194,41 @@ export default function PatientAppointments({ patient }) {
                 </div>
 
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => handleOpenTreatment(appt)}
-                    disabled={isFetching}
-                    // FIX #1: Read appt.treatmentId (camelCase)
-                    className={`p-2 rounded-lg transition-colors ${appt.treatmentId ? 'text-blue-600 hover:bg-blue-50' : 'text-teal-600 hover:bg-teal-50'}`}
-                    title={appt.treatmentId ? 'ערוך תיעוד' : 'תעד טיפול'}
-                  >
-                    {isFetching && selectedAppt?.id === appt.id ? (
-                      <Spinner className="w-4 h-4" />
-                    ) : appt.treatmentId ? (
-                      <Pencil className="w-4 h-4" />
-                    ) : (
+                  {appt.treatmentId ? (
+                    <>
+                      {/* View button — read-only */}
+                      <button
+                        onClick={() => handleViewTreatment(appt)}
+                        disabled={isFetching}
+                        className="p-2 rounded-lg transition-colors text-teal-600 hover:bg-teal-50"
+                        title="צפה בתיעוד"
+                      >
+                        {isFetching && selectedAppt?.id === appt.id
+                          ? <Spinner className="w-4 h-4" />
+                          : <Eye className="w-4 h-4" />
+                        }
+                      </button>
+                      {/* Edit button */}
+                      <button
+                        onClick={() => handleOpenTreatment(appt)}
+                        disabled={isFetching}
+                        className="p-2 rounded-lg transition-colors text-blue-600 hover:bg-blue-50"
+                        title="ערוך תיעוד"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                    </>
+                  ) : (
+                    /* New treatment button */
+                    <button
+                      onClick={() => handleOpenTreatment(appt)}
+                      disabled={isFetching}
+                      className="p-2 rounded-lg transition-colors text-teal-600 hover:bg-teal-50"
+                      title="תעד טיפול"
+                    >
                       <FileText className="w-4 h-4" />
-                    )}
-                  </button>
+                    </button>
+                  )}
 
                   <button
                     onClick={() => setDeleteTarget(appt)}
@@ -240,7 +271,19 @@ export default function PatientAppointments({ patient }) {
         </div>
       )}
 
-      {/* Treatment Dialog */}
+      {/* View Modal — read-only */}
+      <TreatmentViewModal
+        open={viewModalOpen}
+        onClose={() => { setViewModalOpen(false); setViewTreatment(null); setViewingAppt(null); }}
+        treatment={viewTreatment}
+        patient={patient}
+        onEdit={() => {
+          setViewModalOpen(false);
+          handleOpenTreatment(viewingAppt);
+        }}
+      />
+
+      {/* Treatment Dialog — edit / create */}
       {treatDialogOpen && (
         <TreatmentDialog
           open={treatDialogOpen}

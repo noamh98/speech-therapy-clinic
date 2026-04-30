@@ -9,10 +9,11 @@ import { exportToICS, downloadFile } from '../utils/icsUtils';
 import { getHolidayName } from '../utils/jewishHolidays';
 import { Modal, ConfirmDialog, Spinner } from '../components/ui';
 import TreatmentDialog from '../components/shared/TreatmentDialog';
+import TreatmentViewModal from '../components/shared/TreatmentViewModal';
 import { formatDate, localDateStr } from '../utils/formatters';
 import {
   ChevronRight, ChevronLeft, Plus, Download, Filter,
-  Calendar as CalIcon, Clock, PlusCircle, Pencil,
+  Calendar as CalIcon, Clock, PlusCircle, Pencil, Eye,
   ArrowRight, Trash2, AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -65,13 +66,14 @@ export default function CalendarPage() {
   // ── Context (no local loadAll — data comes from shared cache) ──
   const {
     appointments, patients, patientMap,
-    docStatusMap, loading, refresh,
+    docStatusMap, treatmentsByApptId, loading, refresh,
   } = useClinicData();
 
   const [view,           setView]         = useState('month');
   const [cursor,         setCursor]       = useState(new Date());
   const [apptModal,      setApptModal]    = useState(null);
   const [treatModal,     setTreatModal]   = useState(null);
+  const [viewModal,      setViewModal]    = useState(null);
   const [deleteTarget,   setDeleteTarget] = useState(null);
   // NEW: undocumented-only filter
   const [showUndocOnly,  setShowUndocOnly] = useState(false);
@@ -328,6 +330,7 @@ export default function CalendarPage() {
                   onNew={(time) => setApptModal({ date: toDateStr(cursor), time })}
                   onEdit={(a) => setApptModal({ date: a.date, appt: a })}
                   onTreat={(a) => setTreatModal(a)}
+                  onView={(a) => setViewModal(a)}
                   onDelete={(a) => setDeleteTarget(a)}
                   onBack={() => setView('month')}
                 />
@@ -362,6 +365,14 @@ export default function CalendarPage() {
           onSaved={() => { setTreatModal(null); refresh(); }}
         />
       )}
+
+      <TreatmentViewModal
+        open={!!viewModal}
+        onClose={() => setViewModal(null)}
+        treatment={viewModal ? treatmentsByApptId[viewModal.id] : null}
+        patient={viewModal ? patientMap[viewModal.patient_id] : null}
+        onEdit={() => { const a = viewModal; setViewModal(null); setTreatModal(a); }}
+      />
 
       <ConfirmDialog
         open={!!deleteTarget}
@@ -557,7 +568,7 @@ function WeekView({ dates, getAppts, patientMap, onSelectDay, onNew, onEdit }) {
 }
 
 // ─── Day View ─────────────────────────────────────────────────────────────────
-function DayView({ date, appts, patientMap, docStatusMap, onNew, onEdit, onTreat, onDelete, onBack }) {
+function DayView({ date, appts, patientMap, docStatusMap, onNew, onEdit, onTreat, onView, onDelete, onBack }) {
   const dateStr = toDateStr(date);
   const holiday = getHolidayName(dateStr);
   const isToday = dateStr === toDateStr(new Date());
@@ -672,21 +683,38 @@ function DayView({ date, appts, patientMap, docStatusMap, onNew, onEdit, onTreat
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); onTreat(a); }}
-                              className={`p-2 rounded-lg transition-colors text-sm font-medium flex items-center gap-1.5
-                                ${(a.treatmentId || a.treatment_id)
-                                  ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-                                }`}
-                              title={(a.treatmentId || a.treatment_id) ? 'ערוך תיעוד' : 'תעד טיפול'}
-                            >
-                              {(a.treatmentId || a.treatment_id) ? <Pencil className="w-4 h-4" /> : <PlusCircle className="w-4 h-4" />}
-                              <span className="hidden md:inline text-xs">
-                                {(a.treatmentId || a.treatment_id) ? 'ערוך' : 'תעד'}
-                              </span>
-                            </button>
+                          <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {(a.treatmentId || a.treatment_id) ? (
+                              <>
+                                {/* View — read-only */}
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); onView(a); }}
+                                  className="p-2 rounded-lg bg-teal-50 text-teal-700 hover:bg-teal-100 transition-colors text-sm font-medium flex items-center gap-1.5"
+                                  title="צפה בתיעוד"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                  <span className="hidden md:inline text-xs">צפייה</span>
+                                </button>
+                                {/* Edit */}
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); onTreat(a); }}
+                                  className="p-2 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors text-sm font-medium flex items-center gap-1.5"
+                                  title="ערוך תיעוד"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                  <span className="hidden md:inline text-xs">ערוך</span>
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onTreat(a); }}
+                                className="p-2 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors text-sm font-medium flex items-center gap-1.5"
+                                title="תעד טיפול"
+                              >
+                                <PlusCircle className="w-4 h-4" />
+                                <span className="hidden md:inline text-xs">תעד</span>
+                              </button>
+                            )}
                             <button
                               onClick={(e) => { e.stopPropagation(); onDelete(a); }}
                               className="p-2 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 transition-colors"
