@@ -21,7 +21,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useClinicData } from '../context/useClinicData';
-import { StatCard, Card, Spinner } from '../components/ui';
+import { StatCard, Card, DashboardSkeleton } from '../components/ui';
 import TreatmentDialog from '../components/shared/TreatmentDialog';
 import { formatDate, formatCurrency, localDateStr } from '../utils/formatters';
 import {
@@ -72,13 +72,7 @@ export default function Dashboard() {
   const greeting = hour < 12 ? 'בוקר טוב' : hour < 17 ? 'צהריים טובים' : 'ערב טוב';
   const displayName = profile?.name?.split(' ')[0] || '';
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Spinner size="lg" />
-      </div>
-    );
-  }
+  if (loading) return <DashboardSkeleton />;
 
   return (
     <div className="space-y-5 max-w-6xl mx-auto">
@@ -342,9 +336,9 @@ function AppointmentRow({ appt, patient, onDocument, docStatus, index = 0, showD
 
       <button
         onClick={onDocument}
-        className={`opacity-0 group-hover:opacity-100 flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-all flex-shrink-0
+        className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-all flex-shrink-0
           ${isDocumented
-            ? 'text-blue-600 bg-blue-50 hover:bg-blue-100'
+            ? 'opacity-0 group-hover:opacity-100 text-blue-600 bg-blue-50 hover:bg-blue-100'
             : 'text-teal-600 bg-teal-50 hover:bg-teal-100'
           }`}
       >

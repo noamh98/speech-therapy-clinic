@@ -63,7 +63,7 @@ exports.callGemini = functions
 
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({
-        model: 'gemini-3-flash-preview',
+        model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
         systemInstruction: systemPrompt,
       });
 

@@ -148,6 +148,35 @@ export function PageHeader({ title, subtitle, actions }) {
   );
 }
 
+/* ── Skeleton ───────────────────────────────────────────── */
+export function Skeleton({ className = '' }) {
+  return <div className={`animate-pulse bg-gray-200 rounded-lg ${className}`} />;
+}
+
+export function DashboardSkeleton() {
+  return (
+    <div className="space-y-5 max-w-6xl mx-auto">
+      <Skeleton className="h-10 w-64" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20" />)}
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20" />)}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 space-y-2">
+          <Skeleton className="h-8 w-40" />
+          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-14" />)}
+        </div>
+        <div className="space-y-2">
+          <Skeleton className="h-8 w-40" />
+          {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-14" />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Form Field ─────────────────────────────────────────── */
 export function FormField({ label, required, error, children }) {
   return (

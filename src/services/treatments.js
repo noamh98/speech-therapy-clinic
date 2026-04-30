@@ -193,6 +193,11 @@ export async function createTreatment(data) {
     description: data.description || '',
     progress: data.progress || '',
     files: data.files || [],
+    // Clinical assessment fields — must be saved on create, not only on edit
+    clinicalDomain:      data.clinicalDomain      || null,
+    clinicalDomainOther: data.clinicalDomainOther || '',
+    cooperationLevel:    data.cooperationLevel    != null ? data.cooperationLevel : null,
+    progressRating:      data.progressRating      || null,
     ...systemFields(),
     created_date: now,
     updated_date: now,

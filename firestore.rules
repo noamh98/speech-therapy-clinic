@@ -3,105 +3,108 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions
+    // ── Helpers ────────────────────────────────────────────────────────────────
+
     function isAuth() {
       return request.auth != null;
     }
 
     function isAdmin() {
-      // ✅ SECURITY FIX: Check admin role in database instead of email
-      // This prevents spoofing if someone changes their email
-      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      // Role stored in DB — not email — so it can't be spoofed by changing email
+      return isAuth()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
-    function isOwner(otherId) {
-      // Helper for future use - checks if another user ID is the resource owner
-      return isAuth() && otherId == request.auth.uid;
-    }
-
-    // Users collection – each user can read/write their own profile, admins can read all
-    match /users/{userId} {
-      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
-      allow write: if isAuth() && request.auth.uid == userId;  // Users can only modify own profile
-      allow create: if isAuth() && request.auth.uid == userId;
-    }
-
-    // Helper: Check if document is owned by current user or user is admin
+    // Read / update / delete: the document's ownerId must equal the caller's uid
     function canAccessRecord() {
       return isAuth() && (
-        isAdmin() ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ownerId == resource.data.ownerId ||
         resource.data.ownerId == request.auth.uid
+        || isAdmin()
       );
     }
 
+    // Create: the incoming document's ownerId must equal the caller's uid
     function canCreateRecord() {
       return isAuth() && (
-        isAdmin() ||
         request.resource.data.ownerId == request.auth.uid
+        || isAdmin()
       );
     }
 
-    // ✅ SECURITY: All collections now use ownerId instead of therapist_email
+    // Update: caller must own the existing doc AND must not change ownerId
+    function canUpdateRecord() {
+      return canAccessRecord()
+        && request.resource.data.ownerId == resource.data.ownerId;
+    }
+
+    // ── Users ──────────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read:   if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuth() && request.auth.uid == userId;
+      allow update: if isAuth() && request.auth.uid == userId;
+      allow delete: if isAdmin();
+    }
+
+    // ── Clinic data collections ────────────────────────────────────────────────
     match /patients/{id} {
       allow read:   if canAccessRecord();
       allow create: if canCreateRecord();
-      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow update: if canUpdateRecord();
       allow delete: if canAccessRecord();
     }
 
     match /appointments/{id} {
       allow read:   if canAccessRecord();
       allow create: if canCreateRecord();
-      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow update: if canUpdateRecord();
       allow delete: if canAccessRecord();
     }
 
     match /treatments/{id} {
       allow read:   if canAccessRecord();
       allow create: if canCreateRecord();
-      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
-      allow delete: if canAccessRecord();
-    }
-
-    match /progress/{id} {
-      allow read:   if canAccessRecord();
-      allow create: if canCreateRecord();
-      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
-      allow delete: if canAccessRecord();
-    }
-
-    match /intakeForms/{id} {
-      allow read:   if canAccessRecord();
-      allow create: if canCreateRecord();
-      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
-      allow delete: if canAccessRecord();
-    }
-
-    match /templates/{id} {
-      allow read:   if canAccessRecord();
-      allow create: if canCreateRecord();
-      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
-      allow delete: if canAccessRecord();
-    }
-
-    match /notifications/{id} {
-      allow read:   if canAccessRecord();
-      allow create: if canCreateRecord();
-      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow update: if canUpdateRecord();
       allow delete: if canAccessRecord();
     }
 
     match /payments/{id} {
       allow read:   if canAccessRecord();
       allow create: if canCreateRecord();
-      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow update: if canUpdateRecord();
       allow delete: if canAccessRecord();
     }
 
-    // ✅ SECURITY: Storage rules – only owner can access their receipts
+    match /progress/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canUpdateRecord();
+      allow delete: if canAccessRecord();
+    }
+
+    match /intakeForms/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canUpdateRecord();
+      allow delete: if canAccessRecord();
+    }
+
+    match /templates/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canUpdateRecord();
+      allow delete: if canAccessRecord();
+    }
+
+    match /notifications/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canUpdateRecord();
+      allow delete: if canAccessRecord();
+    }
+
+    // ── Storage metadata (receipts) ────────────────────────────────────────────
     match /receipts/{userId}/{allPaths=**} {
-      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow read:  if isAuth() && (request.auth.uid == userId || isAdmin());
       allow write: if isAuth() && request.auth.uid == userId;
     }
   }

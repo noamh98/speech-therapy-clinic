@@ -14,6 +14,8 @@
 import { useState, useEffect } from 'react';
 import { Modal } from '../ui';
 import { useClinicData } from '../../context/useClinicData';
+import { useAuth } from '../../context/AuthContext';
+import { generateTreatmentPDF } from '../../utils/generateTreatmentPDF';
 import {
   createTreatment, updateTreatment, getNextTreatmentNumber,
   getTreatment, deleteTreatment, getPatientTreatments,
@@ -38,6 +40,7 @@ export default function TreatmentDialog({
   const {
     setTreatments, setPatients, setAppointments, setPayments, fetchAll
   } = useClinicData();
+  const { profile } = useAuth();
 
   const [isEdit, setIsEdit] = useState(false);
   const today = localDateStr();
@@ -575,6 +578,15 @@ export default function TreatmentDialog({
             {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100 font-medium">{error}</div>}
 
             <div className="flex gap-3 pt-4">
+              {isEdit && (
+                <button
+                  type="button"
+                  onClick={() => generateTreatmentPDF({ treatment: form, patient, clinicName: profile?.clinic_name })}
+                  className="flex items-center gap-1.5 text-sm font-medium px-4 py-3 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors flex-shrink-0"
+                >
+                  <FileText className="w-4 h-4" /> PDF
+                </button>
+              )}
               <button type="button" className="btn-secondary flex-1 py-3" onClick={onClose} disabled={loading}>ביטול</button>
               <button type="submit" disabled={loading} className="btn-primary flex-1 py-3 flex items-center justify-center gap-2">
                 {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> <span>שומר...</span></> : <span>{isEdit ? 'עדכן תיעוד' : 'שמור תיעוד'}</span>}

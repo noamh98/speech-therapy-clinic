@@ -443,6 +443,7 @@ function MonthView({ dates, currentMonth, getAppts, patientMap, onSelectDay, onN
                 {appts.slice(0, 3).map((a) => {
                   const color = getPatientColor(a.patient_id);
                   const name = patientMap[a.patient_id]?.full_name || '—';
+                  const firstName = name.split(' ')[0];
                   return (
                     <div
                       key={a.id}
@@ -455,7 +456,7 @@ function MonthView({ dates, currentMonth, getAppts, patientMap, onSelectDay, onN
                       title={`${a.start_time} — ${name}`}
                     >
                       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.status === 'completed' ? 'bg-gray-400' : color.bg}`} />
-                      <span className="truncate">{a.start_time} {name}</span>
+                      <span className="truncate">{a.start_time} {firstName}</span>
                     </div>
                   );
                 })}
