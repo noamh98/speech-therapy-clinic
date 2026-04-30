@@ -1,0 +1,10 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "app.web.speech_therapy_clinic.twa",
+    "sha256_cert_fingerprints": ["A9:78:80:99:13:59:5E:73:4E:73:64:40:F9:75:E3:89:38:AE:A7:41:25:90:C3:32:8E:94:0E:A1:FD:10:72:5A"]
+  }
+}]
+
+

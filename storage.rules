@@ -1,0 +1,44 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SpeechCare — Firebase Storage Security Rules
+//
+// Path structure (March 20th baseline):
+//   patients/{patientId}/{filename}          — patient documents & attachments
+//   receipts/{ownerId}/{paymentId}/{filename} — payment receipts
+//
+// Design:
+//   - No unauthenticated reads or writes anywhere.
+//   - Patient files: any authenticated user of this project may read/write.
+//     (This app is single-therapist per Firebase project; Firestore rules
+//      enforce data ownership at the document level.)
+//   - Receipt files: only the authenticated user whose UID matches the
+//     {ownerId} path segment may read or write — enforced by path comparison.
+//   - Everything else is denied by the catch-all at the bottom.
+// ─────────────────────────────────────────────────────────────────────────────
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ── Patient documents ─────────────────────────────────────────────────────
+    // Path: patients/{patientId}/{filename}
+    // Requires authentication. Ownership is enforced at the Firestore layer —
+    // the patient document itself is protected by Firestore Rules (ownerId check).
+    match /patients/{patientId}/{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Payment receipts ──────────────────────────────────────────────────────
+    // Path: receipts/{ownerId}/{paymentId}/{filename}
+    // ownerId in the path is compared to the caller's uid — full tenant isolation.
+    match /receipts/{ownerId}/{allPaths=**} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == ownerId;
+    }
+
+    // ── Default deny ──────────────────────────────────────────────────────────
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
