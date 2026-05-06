@@ -24,6 +24,7 @@ import {
 import { linkAppointmentToTreatment } from '../../services/appointments';
 // ✅ שינוי 1: הוספת createPayment לייבוא
 import { getPaymentsByTreatment, createPayment } from '../../services/payments';
+import { PAYMENT_STATUS } from '../../constants/paymentStatus';
 import { getTemplates } from '../../services/templates';
 import { uploadPatientFile } from '../../services/storage';
 import {
@@ -315,7 +316,7 @@ export default function TreatmentDialog({
       // 5c. Update Appointment status
       if (finalAppointmentId) {
         setAppointments(prev => prev.map(a =>
-          a.id === finalAppointmentId ? { ...a, status: 'completed', treatmentId: cid } : a
+          a.id === finalAppointmentId ? { ...a, status: PAYMENT_STATUS.COMPLETED, treatmentId: cid } : a
         ));
         linkAppointmentToTreatment(finalAppointmentId, cid).catch(() => {});
       }
@@ -330,7 +331,7 @@ export default function TreatmentDialog({
             appointmentId: finalAppointmentId,
             amount: dataToSave.paymentAmount,
             payment_method: dataToSave.payment_method,
-            payment_status: 'completed',
+            payment_status: PAYMENT_STATUS.COMPLETED,
             payment_date: form.date,
             notes: dataToSave.payment_notes || '',
           });
@@ -500,7 +501,7 @@ export default function TreatmentDialog({
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-xs text-green-700">
                     <div><span className="font-medium block">סכום</span>₪{existingPayment.amount}</div>
-                    <div><span className="font-medium block">סטטוס</span>{existingPayment.payment_status === 'completed' ? 'שולם ✓' : 'ממתין'}</div>
+                    <div><span className="font-medium block">סטטוס</span>{existingPayment.payment_status === PAYMENT_STATUS.COMPLETED ? 'שולם ✓' : 'ממתין'}</div>
                     <div><span className="font-medium block">תאריך</span>{existingPayment.payment_date || '—'}</div>
                   </div>
                 </div>

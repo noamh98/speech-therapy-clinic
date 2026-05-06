@@ -36,6 +36,20 @@ service firebase.storage {
                          && request.auth.uid == ownerId;
     }
 
+    // ── Managed receipt PDFs (client read-only; writes via Admin SDK only) ────
+    // Path: receipts-managed/{ownerId}/{receiptId}/{filename}
+    match /receipts-managed/{ownerId}/{allPaths=**} {
+      allow read:  if request.auth != null && request.auth.uid == ownerId;
+      allow write: if false;
+    }
+
+    // ── Receipt profile assets (logo, signature) ──────────────────────────────
+    // Path: receiptProfiles/{ownerId}/{filename}
+    match /receiptProfiles/{ownerId}/{allPaths=**} {
+      allow read:  if request.auth != null && request.auth.uid == ownerId;
+      allow write: if request.auth != null && request.auth.uid == ownerId;
+    }
+
     // ── Default deny ──────────────────────────────────────────────────────────
     match /{allPaths=**} {
       allow read, write: if false;

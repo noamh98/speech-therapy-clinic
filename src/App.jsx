@@ -18,6 +18,7 @@ import AIAssistant from './pages/AIAssistant';
 import Settings from './pages/Settings';
 import AdminUsers from './pages/AdminUsers';
 import PatientPortal from './pages/PatientPortal';
+import Receipts from './pages/Receipts/index';
 import { Spinner } from './components/ui';
 
 function ProtectedRoute({ children, adminOnly = false }) {
@@ -53,6 +54,7 @@ function AppRoutes() {
               <Route path="/templates"        element={<Templates />} />
               <Route path="/ai-assistant"     element={<AIAssistant />} />
               <Route path="/settings"         element={<Settings />} />
+              <Route path="/receipts"         element={<Receipts />} />
               <Route path="/admin/users"      element={<ProtectedRoute adminOnly><AdminUsers /></ProtectedRoute>} />
               <Route path="*"                 element={<Navigate to="/" />} />
             </Routes>

@@ -1,3 +1,28 @@
+
+// 🔒 AUDIT GUARD – prevent modifying payment with receipt
+function assertPaymentNotLockedByReceipt(existingPayment, data) {
+  if (!existingPayment) return;
+
+  if (existingPayment.receipt_id || existingPayment.receipt_url) {
+    const lockedFields = [
+      'amount',
+      'payment_date',
+      'payment_method',
+      'notes',
+      'status'
+    ];
+
+    const forbidden = lockedFields.some(
+      field => Object.prototype.hasOwnProperty.call(data, field)
+    );
+
+    if (forbidden) {
+      throw new Error('PAYMENT_LOCKED_BY_RECEIPT');
+    }
+  }
+}
+
+
 // src/services/payments.js — Multi-tenant payments service using ownerId
 /**
  * FIXES IN THIS VERSION:
@@ -154,7 +179,7 @@ export async function getTotalPaymentsByPatient(patientId) {
     collection(db, COLLECTION),
     where('ownerId', '==', user.uid),
     where('patientId', '==', patientId),
-    where('payment_status', '==', 'completed')
+    where('payment_status', '==', PAYMENT_STATUS.COMPLETED)
   );
   const snap = await getDocs(q);
   return snap.docs
@@ -197,7 +222,7 @@ export async function createPayment(data) {
     appointmentId:  data.appointmentId || null,
     amount:         Number(data.amount) || 0,
     payment_method: data.payment_method || 'cash',
-    payment_status: data.payment_status || 'completed',
+    payment_status: data.payment_status || PAYMENT_STATUS.COMPLETED,
     payment_date:   data.payment_date || localDateStr(),
     description:    data.description || '',
     notes:          data.notes || '',
@@ -239,6 +264,9 @@ export async function updatePayment(id, data) {
   // FIX B: keep both conventions in sync on update
   if (safeData.patientId)  safeData.patient_id = safeData.patientId;
   if (safeData.patient_id) safeData.patientId  = safeData.patient_id;
+
+  // Prevent client from overriding receipt fields owned by Cloud Functions
+  ['receipt_id', 'receipt_number', 'receipt_mode', 'receipt_status'].forEach(k => delete safeData[k]);
 
   await updateDoc(docRef, { ...safeData, updated_date: serverTimestamp() });
   return { id, ...safeData };
@@ -310,12 +338,12 @@ export async function getPaymentStats(startDate, endDate) {
   payments.forEach(payment => {
     const amount = payment.amount || 0;
     stats.total_amount += amount;
-    if (payment.payment_status === 'completed') {
+    if (payment.payment_status === PAYMENT_STATUS.COMPLETED) {
       stats.completed_amount += amount;
       stats.total_income     += amount;
-    } else if (payment.payment_status === 'pending') {
+    } else if (payment.payment_status === PAYMENT_STATUS.PENDING) {
       stats.pending_amount  += amount;
-    } else if (payment.payment_status === 'refunded') {
+    } else if (payment.payment_status === PAYMENT_STATUS.REFUNDED) {
       stats.refunded_amount += amount;
     }
     const method = payment.payment_method || 'unknown';

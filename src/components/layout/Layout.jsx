@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Calendar, Users, FileText, BarChart2,
   TrendingUp, Layout, Bot, Settings, UserCog, LogOut,
-  Menu, X, Stethoscope, ChevronDown, Bell
+  Menu, X, Stethoscope, ChevronDown, Bell, Receipt
 } from 'lucide-react';
 
 // ─── Navigation items ─────────────────────────────────────────────────────────
@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { path: '/reports/advanced', icon: TrendingUp,      label: 'דוחות מתקדמים', group: 'tools' },
   { path: '/templates',        icon: Layout,          label: 'תבניות',         group: 'tools' },
   { path: '/ai-assistant',     icon: Bot,             label: 'עוזר AI',        group: 'tools' },
+  { path: '/receipts',         icon: Receipt,         label: 'קבלות',          group: 'tools' },
   { path: '/settings',         icon: Settings,        label: 'הגדרות',         group: 'system' },
 ];
 

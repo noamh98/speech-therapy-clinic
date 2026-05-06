@@ -4,13 +4,15 @@
  * 1. UTC DATE OFFSET — uses localDateStr() throughout
  * 2. ENGLISH UI — fully Hebraicized
  * 3. MISSING PAYMENT METHODS — bit, paybox, credit added
- * 4. WRONG DEFAULT payment_status — changed to 'completed'
+ * 4. WRONG DEFAULT payment_status — changed to PAYMENT_STATUS.COMPLETED
  * 5. CONTEXT NOT REFRESHED — calls refresh() after every save/delete
  * 6. handleSave & handleDelete fully implemented
  */
 
 import React, { useState, useEffect } from 'react';
+import { PAYMENT_STATUS } from '../../constants/paymentStatus';
 import { X, Upload, Trash2, Eye, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
+import ReceiptSection from '../receipts/ReceiptSection';
 import {
   createPayment, updatePayment, deletePayment,
   updatePaymentReceipt, deletePaymentReceipt,
@@ -35,10 +37,10 @@ const PAYMENT_METHOD_OPTIONS = [
 ];
 
 const PAYMENT_STATUS_OPTIONS = [
-  { value: 'completed', label: 'שולם' },
-  { value: 'pending',   label: 'ממתין לתשלום' },
-  { value: 'refunded',  label: 'הוחזר' },
-  { value: 'cancelled', label: 'בוטל' },
+  { value: PAYMENT_STATUS.COMPLETED, label: 'שולם' },
+  { value: PAYMENT_STATUS.PENDING,   label: 'ממתין לתשלום' },
+  { value: PAYMENT_STATUS.REFUNDED,  label: 'הוחזר' },
+  { value: PAYMENT_STATUS.CANCELLED, label: 'בוטל' },
 ];
 
 export function PaymentModal({
@@ -56,11 +58,12 @@ export function PaymentModal({
     patientId:      patientId  || '',
     amount:         '',
     payment_method: 'cash',
-    payment_status: 'completed',
+    payment_status: PAYMENT_STATUS.COMPLETED,
     payment_date:   localDateStr(),
     notes:          '',
   });
 
+  const [receiptRefreshKey, setReceiptRefreshKey] = useState(0);
   const [receipt,         setReceipt]         = useState(null);
   const [uploadProgress,  setUploadProgress]  = useState(0);
   const [isUploading,     setIsUploading]     = useState(false);
@@ -78,7 +81,7 @@ export function PaymentModal({
         patientId:      payment.patientId      || patientId  || '',
         amount:         payment.amount         || '',
         payment_method: payment.payment_method || 'cash',
-        payment_status: payment.payment_status || 'completed',
+        payment_status: payment.payment_status || PAYMENT_STATUS.COMPLETED,
         payment_date:   payment.payment_date   || localDateStr(),
         notes:          payment.notes          || '',
       });
@@ -98,7 +101,7 @@ export function PaymentModal({
         patientId:      patientId  || '',
         amount:         '',
         payment_method: 'cash',
-        payment_status: 'completed',
+        payment_status: PAYMENT_STATUS.COMPLETED,
         payment_date:   localDateStr(),
         notes:          '',
       });
@@ -250,6 +253,12 @@ export function PaymentModal({
   if (!isOpen) return null;
 
   const busy = isSaving || isUploading || isDeleting;
+  // If the original payment had a stored receipt and it's still present in state,
+  // lock editing until the receipt is removed or replaced.
+  const isReceiptLocked = Boolean(
+    (payment?.receipt_url && receipt?.url) ||
+    (payment?.receipt_id && payment?.receipt_status === 'ISSUED')
+  );
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" dir="rtl">
@@ -260,6 +269,11 @@ export function PaymentModal({
           <h2 className="text-lg font-bold text-gray-900">
             {payment?.id ? 'עריכת תשלום' : 'תשלום חדש'}
           </h2>
+    {isReceiptLocked && (
+      <div className="alert alert-warning">
+        תשלום זה כולל קבלה ולכן הוא נעול לעריכה. כדי לבצע שינוי יש לבטל או להחליף קבלה.
+      </div>
+    )}
           <button onClick={onClose} disabled={busy} className="p-1 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50">
             <X className="w-5 h-5 text-gray-500" />
           </button>
@@ -356,9 +370,19 @@ export function PaymentModal({
             />
           </div>
 
-          {/* Receipt upload */}
+          {/* New receipt system — shown for existing payments */}
+          {payment?.id && (
+            <ReceiptSection
+              key={receiptRefreshKey}
+              payment={{ ...payment, ...formData }}
+              onReceiptIssued={() => { setReceiptRefreshKey(k => k + 1); refresh(); }}
+            />
+          )}
+
+          {/* Legacy receipt upload — shown only when new receipt system not used */}
+          {!payment?.receipt_id && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">קבלה</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">קבלה (קובץ מצורף)</label>
             {receipt ? (
               <div className="flex items-center gap-2 p-3 bg-gray-50 border border-gray-200 rounded-xl">
                 <div className="flex-1 min-w-0">
@@ -396,6 +420,7 @@ export function PaymentModal({
               </label>
             )}
           </div>
+          )}
 
           {/* Delete confirmation */}
           {showDeleteConfirm && (
@@ -441,10 +466,10 @@ export function PaymentModal({
             ביטול
           </button>
           <button
-            onClick={handleSave}
+            onClick={handleSave} 
             className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-xl hover:bg-teal-700 font-medium text-sm transition disabled:opacity-50 flex items-center justify-center gap-2"
-            disabled={busy}
-          >
+            
+           disabled={busy || isReceiptLocked}>
             {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" /> שומר...</> : 'שמור תשלום'}
           </button>
         </div>

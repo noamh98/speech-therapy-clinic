@@ -40,6 +40,7 @@ import {
   useEffect, useRef, useMemo,
 } from 'react';
 import { useAuth } from './AuthContext';
+import { PAYMENT_STATUS } from '../constants/paymentStatus';
 import { getPatients } from '../services/patients';
 import { getAppointments } from '../services/appointments';
 import { getTreatments } from '../services/treatments';
@@ -154,10 +155,10 @@ export function ClinicDataProvider({ children }) {
     const map = {};
     for (const a of appointments) {
       const isDocumented        = Boolean(treatmentsByApptId[a.id]) || Boolean(a.treatmentId);
-      const isCancelledOrMissed = a.status === 'cancelled' || a.status === 'missed';
+      const isCancelledOrMissed = a.status === PAYMENT_STATUS.CANCELLED || a.status === 'missed';
       const isFuture            = a.date > today;
 
-      if (isCancelledOrMissed)   map[a.id] = 'cancelled';
+      if (isCancelledOrMissed)   map[a.id] = PAYMENT_STATUS.CANCELLED;
       else if (isDocumented)     map[a.id] = 'documented';
       else if (isFuture)         map[a.id] = 'future';
       else                       map[a.id] = 'needs_doc';
@@ -192,10 +193,10 @@ export function ClinicDataProvider({ children }) {
       total_payments:   monthPayments.length,
       total_amount:     monthPayments.reduce((s, p) => s + (p.amount || 0), 0),
       completed_amount: monthPayments
-        .filter(p => p.payment_status === 'completed')
+        .filter(p => p.payment_status === PAYMENT_STATUS.COMPLETED)
         .reduce((s, p) => s + (p.amount || 0), 0),
       pending_amount:   monthPayments
-        .filter(p => p.payment_status === 'pending')
+        .filter(p => p.payment_status === PAYMENT_STATUS.PENDING)
         .reduce((s, p) => s + (p.amount || 0), 0),
     };
   }, [payments, thisMonth]);

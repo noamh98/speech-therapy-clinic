@@ -102,10 +102,15 @@ service cloud.firestore {
       allow delete: if canAccessRecord();
     }
 
-    // ── Storage metadata (receipts) ────────────────────────────────────────────
-    match /receipts/{userId}/{allPaths=**} {
-      allow read:  if isAuth() && (request.auth.uid == userId || isAdmin());
-      allow write: if isAuth() && request.auth.uid == userId;
+    // ── Receipt profiles (one doc per therapist, uid = doc id) ────────────────
+    match /receiptProfiles/{uid} {
+      allow read, write: if isAuth() && request.auth.uid == uid;
+    }
+
+    // ── Receipts (immutable from client — all writes via Cloud Functions) ─────
+    match /receipts/{id} {
+      allow read:                    if canAccessRecord();
+      allow create, update, delete:  if false;
     }
   }
 }

@@ -26,11 +26,16 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Edit2, Trash2, Eye, Download, AlertCircle } from 'lucide-react';
+import { Edit2, Trash2, Eye, Download, AlertCircle, FileText, ExternalLink } from 'lucide-react';
 import { getPaymentsByPatient, deletePayment } from '../../services/payments';
 import { useClinicData } from '../../context/useClinicData';
 import { PaymentModal } from './PaymentModal';
+import { IssueReceiptModal } from '../receipts/IssueReceiptModal';
+import { ExternalReceiptModal } from '../receipts/ExternalReceiptModal';
+import { VoidOrReplaceModal } from '../receipts/VoidOrReplaceModal';
+import { getReceiptsByPayment, getReceiptPdfUrl } from '../../services/receipts';
 import { formatCurrency } from '../../utils/formatters';
+import { PAYMENT_STATUS } from '../../constants/paymentStatus';
 
 export function PaymentHistory({ patientId, treatmentId = null, onPaymentChange = null }) {
   const [payments, setPayments] = useState([]);
@@ -39,6 +44,13 @@ export function PaymentHistory({ patientId, treatmentId = null, onPaymentChange 
   const [selectedPayment, setSelectedPayment] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(null);
+
+  // Receipt modal state
+  const [receiptTarget, setReceiptTarget] = useState(null); // payment being receipted
+  const [showIssueModal, setShowIssueModal] = useState(false);
+  const [showExternalModal, setShowExternalModal] = useState(false);
+  const [showVoidModal, setShowVoidModal] = useState(false);
+  const [voidTarget, setVoidTarget] = useState(null); // { payment, receipt }
 
   // FIX #4: Get shared refresh so Dashboard stats update after payment delete
   const { refresh } = useClinicData();
@@ -100,6 +112,36 @@ export function PaymentHistory({ patientId, treatmentId = null, onPaymentChange 
     refresh();
   };
 
+  const handleReceiptIssued = () => {
+    setShowIssueModal(false);
+    setShowExternalModal(false);
+    setReceiptTarget(null);
+    loadPayments();
+    refresh();
+    if (onPaymentChange) onPaymentChange();
+  };
+
+  const handleVoidDone = () => {
+    setShowVoidModal(false);
+    setVoidTarget(null);
+    loadPayments();
+    refresh();
+    if (onPaymentChange) onPaymentChange();
+  };
+
+  const openVoidModal = async (payment) => {
+    // Load the receipt doc for this payment
+    try {
+      const docs = await getReceiptsByPayment(payment.id);
+      const receipt = docs.find(r => r.status === 'ISSUED' && r.doc_type === 'ORIGINAL') || docs[0] || null;
+      setVoidTarget({ payment, receipt });
+      setShowVoidModal(true);
+    } catch (_) {
+      setVoidTarget({ payment, receipt: null });
+      setShowVoidModal(true);
+    }
+  };
+
   // Filter to this treatment's payments if treatmentId provided
   const filteredPayments = treatmentId
     ? payments.filter(p => p.treatmentId === treatmentId)
@@ -109,10 +151,10 @@ export function PaymentHistory({ patientId, treatmentId = null, onPaymentChange 
     total: filteredPayments.length,
     totalAmount: filteredPayments.reduce((s, p) => s + (p.amount || 0), 0),
     completedAmount: filteredPayments
-      .filter(p => p.payment_status === 'completed')
+      .filter(p => p.payment_status === PAYMENT_STATUS.COMPLETED)
       .reduce((s, p) => s + (p.amount || 0), 0),
     pendingAmount: filteredPayments
-      .filter(p => p.payment_status === 'pending')
+      .filter(p => p.payment_status === PAYMENT_STATUS.PENDING)
       .reduce((s, p) => s + (p.amount || 0), 0),
   };
 
@@ -197,25 +239,64 @@ export function PaymentHistory({ patientId, treatmentId = null, onPaymentChange 
                   <p>{payment.payment_date} · {getMethodLabel(payment.payment_method)}</p>
                   {payment.notes && <p className="text-gray-400 truncate">{payment.notes}</p>}
                 </div>
-                {payment.receipt_url && (
-                  <div className="flex items-center gap-2 mt-1">
-                    <a
-                      href={payment.receipt_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
-                    >
-                      <Eye size={12} /> צפה בקבלה
-                    </a>
-                    <a
-                      href={payment.receipt_url}
-                      download={payment.receipt_filename}
-                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
-                    >
-                      <Download size={12} /> הורד
-                    </a>
-                  </div>
-                )}
+                {/* Receipt status / actions — shown inline on the payment card */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {payment.receipt_id ? (
+                    // Receipt exists — show status badge
+                    <>
+                      {payment.receipt_status === 'ISSUED' && (
+                        <span className="inline-flex items-center gap-1 text-xs bg-teal-50 text-teal-700 px-1.5 py-0.5 rounded border border-teal-200 font-medium">
+                          <FileText size={10} /> קבלה {payment.receipt_number}
+                        </span>
+                      )}
+                      {payment.receipt_status === 'VOIDED' && (
+                        <span className="inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">
+                          קבלה בוטלה · {payment.receipt_number}
+                        </span>
+                      )}
+                      {payment.receipt_status === 'REPLACED' && (
+                        <span className="inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">
+                          קבלה הוחלפה · {payment.receipt_number}
+                        </span>
+                      )}
+                      {/* Void button — only for ISSUED receipts */}
+                      {payment.receipt_status === 'ISSUED' && (
+                        <button
+                          onClick={() => openVoidModal(payment)}
+                          className="text-xs text-red-500 hover:text-red-700 hover:underline"
+                        >
+                          בטל קבלה
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    // No receipt yet — show issue buttons
+                    <>
+                      <button
+                        onClick={() => { setReceiptTarget(payment); setShowIssueModal(true); }}
+                        className="inline-flex items-center gap-1 text-xs bg-teal-600 text-white px-2 py-0.5 rounded hover:bg-teal-700 transition"
+                      >
+                        <FileText size={10} /> הפק קבלה
+                      </button>
+                      <button
+                        onClick={() => { setReceiptTarget(payment); setShowExternalModal(true); }}
+                        className="inline-flex items-center gap-1 text-xs border border-gray-300 text-gray-600 px-2 py-0.5 rounded hover:bg-gray-50 transition"
+                      >
+                        קבלה חיצונית
+                      </button>
+                    </>
+                  )}
+                  {/* Legacy receipt upload (no receipt_id but has receipt_url) */}
+                  {!payment.receipt_id && payment.receipt_url && (
+                    <>
+                      <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">ישן</span>
+                      <a href={payment.receipt_url} target="_blank" rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700">
+                        <Eye size={10} /> צפה
+                      </a>
+                    </>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-1 mr-2 flex-shrink-0">
@@ -223,14 +304,15 @@ export function PaymentHistory({ patientId, treatmentId = null, onPaymentChange 
                   onClick={() => handleEditPayment(payment)}
                   className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
                   title="ערוך תשלום"
+                  disabled={!!(payment.receipt_id && payment.receipt_status === 'ISSUED')}
                 >
                   <Edit2 size={15} />
                 </button>
                 <button
                   onClick={() => handleDeletePayment(payment.id)}
-                  disabled={deleting === payment.id}
+                  disabled={deleting === payment.id || !!(payment.receipt_id && payment.receipt_status === 'ISSUED')}
                   className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition disabled:opacity-40"
-                  title="מחק תשלום"
+                  title={payment.receipt_id && payment.receipt_status === 'ISSUED' ? 'לא ניתן למחוק תשלום עם קבלה' : 'מחק תשלום'}
                 >
                   <Trash2 size={15} />
                 </button>
@@ -247,6 +329,27 @@ export function PaymentHistory({ patientId, treatmentId = null, onPaymentChange 
         payment={selectedPayment}
         patientId={patientId}
         treatmentId={treatmentId}
+      />
+
+      {/* Receipt modals — opened directly from the payment card */}
+      <IssueReceiptModal
+        isOpen={showIssueModal}
+        onClose={() => { setShowIssueModal(false); setReceiptTarget(null); }}
+        onIssued={handleReceiptIssued}
+        payment={receiptTarget}
+      />
+      <ExternalReceiptModal
+        isOpen={showExternalModal}
+        onClose={() => { setShowExternalModal(false); setReceiptTarget(null); }}
+        onRegistered={handleReceiptIssued}
+        payment={receiptTarget}
+      />
+      <VoidOrReplaceModal
+        isOpen={showVoidModal}
+        onClose={() => { setShowVoidModal(false); setVoidTarget(null); }}
+        onDone={handleVoidDone}
+        receipt={voidTarget?.receipt}
+        patientId={patientId}
       />
     </div>
   );
