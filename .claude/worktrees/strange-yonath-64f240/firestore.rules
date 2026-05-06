@@ -1,0 +1,108 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      // ✅ SECURITY FIX: Check admin role in database instead of email
+      // This prevents spoofing if someone changes their email
+      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isOwner(otherId) {
+      // Helper for future use - checks if another user ID is the resource owner
+      return isAuth() && otherId == request.auth.uid;
+    }
+
+    // Users collection – each user can read/write their own profile, admins can read all
+    match /users/{userId} {
+      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAuth() && request.auth.uid == userId;  // Users can only modify own profile
+      allow create: if isAuth() && request.auth.uid == userId;
+    }
+
+    // Helper: Check if document is owned by current user or user is admin
+    function canAccessRecord() {
+      return isAuth() && (
+        isAdmin() ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ownerId == resource.data.ownerId ||
+        resource.data.ownerId == request.auth.uid
+      );
+    }
+
+    function canCreateRecord() {
+      return isAuth() && (
+        isAdmin() ||
+        request.resource.data.ownerId == request.auth.uid
+      );
+    }
+
+    // ✅ SECURITY: All collections now use ownerId instead of therapist_email
+    match /patients/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if canAccessRecord();
+    }
+
+    match /appointments/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if canAccessRecord();
+    }
+
+    match /treatments/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if canAccessRecord();
+    }
+
+    match /progress/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if canAccessRecord();
+    }
+
+    match /intakeForms/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if canAccessRecord();
+    }
+
+    match /templates/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if canAccessRecord();
+    }
+
+    match /notifications/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if canAccessRecord();
+    }
+
+    match /payments/{id} {
+      allow read:   if canAccessRecord();
+      allow create: if canCreateRecord();
+      allow update: if canAccessRecord() && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if canAccessRecord();
+    }
+
+    // ✅ SECURITY: Storage rules – only owner can access their receipts
+    match /receipts/{userId}/{allPaths=**} {
+      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAuth() && request.auth.uid == userId;
+    }
+  }
+}

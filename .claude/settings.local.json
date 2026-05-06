@@ -4,7 +4,18 @@
       "Bash(npm run *)",
       "Bash(npx vite *)",
       "Bash(node_modules/.bin/vite build *)",
-      "Bash(dir \"c:\\\\Users\\\\user\\\\Documents\\\\speech therapy clinic\\\\node_modules\\\\.bin\")"
+      "Bash(dir \"c:\\\\Users\\\\user\\\\Documents\\\\speech therapy clinic\\\\node_modules\\\\.bin\")",
+      "Bash(firebase hosting:channel:deploy preview --expires 7d)",
+      "Bash(git push *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\PROJECTS\\\\speech-therapy-clinic\" -Recurse -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -First 50)",
+      "Bash(rtk ls *)",
+      "Bash(npm install *)",
+      "Bash(rtk npm *)",
+      "PowerShell(Set-Location \"c:\\\\PROJECTS\\\\speech-therapy-clinic\"; $job = Start-Job { Set-Location \"c:\\\\PROJECTS\\\\speech-therapy-clinic\"; & npm run dev 2>&1 }; Start-Sleep 8; Receive-Job $job; Stop-Job $job; Remove-Job $job)",
+      "Bash(firebase deploy *)",
+      "Bash(firebase login *)",
+      "Bash(rtk git *)"
     ]
   }
 }

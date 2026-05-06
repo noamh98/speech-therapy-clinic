@@ -17,6 +17,7 @@ import {
   ArrowRight, Trash2, AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { PAYMENT_STATUS } from '../constants/paymentStatus';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const VIEWS = ['month', 'week', 'day'];
@@ -459,14 +460,14 @@ function MonthView({ dates, currentMonth, getAppts, patientMap, onSelectDay, onN
                     <div
                       key={a.id}
                       className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium truncate cursor-pointer
-                        ${a.status === 'completed'
+                        ${a.status === PAYMENT_STATUS.COMPLETED
                           ? 'bg-gray-100 text-gray-500 line-through'
                           : `${color.light} ${color.text}`
                         }`}
                       onClick={(e) => { e.stopPropagation(); onSelectDay(d); }}
                       title={`${a.start_time} — ${name}`}
                     >
-                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.status === 'completed' ? 'bg-gray-400' : color.bg}`} />
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.status === PAYMENT_STATUS.COMPLETED ? 'bg-gray-400' : color.bg}`} />
                       <span className="truncate">{a.start_time} {firstName}</span>
                     </div>
                   );
@@ -543,7 +544,7 @@ function WeekView({ dates, getAppts, patientMap, onSelectDay, onNew, onEdit }) {
                       <div
                         key={a.id}
                         className={`p-2 rounded-lg text-xs cursor-pointer hover:opacity-90 transition-opacity border-r-2
-                          ${a.status === 'completed'
+                          ${a.status === PAYMENT_STATUS.COMPLETED
                             ? 'bg-gray-100 text-gray-500 border-gray-300'
                             : `${color.light} ${color.text} ${color.border}`
                           }`}
@@ -656,14 +657,14 @@ function DayView({ date, appts, patientMap, docStatusMap, onNew, onEdit, onTreat
                               ? 'bg-green-50 border-green-400'
                               : docStatusMap[a.id] === 'needs_doc'
                                 ? 'bg-amber-50 border-amber-400'
-                                : docStatusMap[a.id] === 'cancelled'
+                                : docStatusMap[a.id] === PAYMENT_STATUS.CANCELLED
                                   ? 'bg-gray-50 border-gray-300'
                                   : `${color.light} ${color.border}`
                             }`}
                           onClick={() => onEdit(a)}
                         >
                           <div className="flex-1 min-w-0">
-                            <div className={`font-semibold text-base truncate ${docStatusMap[a.id] === 'cancelled' ? 'text-gray-400 line-through' : color.text}`}>
+                            <div className={`font-semibold text-base truncate ${docStatusMap[a.id] === PAYMENT_STATUS.CANCELLED ? 'text-gray-400 line-through' : color.text}`}>
                               {name}
                             </div>
                             <div className="flex items-center gap-3 mt-1">
@@ -677,7 +678,7 @@ function DayView({ date, appts, patientMap, docStatusMap, onNew, onEdit, onTreat
                               {docStatusMap[a.id] === 'needs_doc' && (
                                 <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">⏳ ממתין לתיעוד</span>
                               )}
-                              {docStatusMap[a.id] === 'cancelled' && (
+                              {docStatusMap[a.id] === PAYMENT_STATUS.CANCELLED && (
                                 <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">❌ בוטל</span>
                               )}
                             </div>
@@ -869,8 +870,8 @@ function AppointmentModal({ open, onClose, onSaved, initialDate, initialTime, ap
               onChange={e => setForm({ ...form, status: e.target.value })}
             >
               <option value="scheduled">מתוכנן</option>
-              <option value="completed">הושלם</option>
-              <option value="cancelled">בוטל</option>
+              <option value={PAYMENT_STATUS.COMPLETED}>הושלם</option>
+              <option value={PAYMENT_STATUS.CANCELLED}>בוטל</option>
               <option value="missed">לא הגיע</option>
             </select>
           </div>

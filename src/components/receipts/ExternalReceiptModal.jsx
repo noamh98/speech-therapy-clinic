@@ -4,7 +4,7 @@ import { registerExternalReceipt } from '../../services/receipts';
 import { uploadReceipt } from '../../services/storage';
 
 export function ExternalReceiptModal({ isOpen, onClose, onRegistered, payment }) {
-  const [form, setForm] = useState({ provider: '', external_receipt_number: '', external_issued_date: '' });
+  const [form, setForm] = useState({ provider: '', external_receipt_number: '', external_issued_date: '', remarks: '' });
   const [pdfFile, setPdfFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -37,7 +37,7 @@ export function ExternalReceiptModal({ isOpen, onClose, onRegistered, payment })
   };
 
   const handleClose = () => {
-    setForm({ provider: '', external_receipt_number: '', external_issued_date: '' });
+    setForm({ provider: '', external_receipt_number: '', external_issued_date: '', remarks: '' });
     setPdfFile(null);
     setUploadProgress(0);
     setError('');
@@ -93,6 +93,17 @@ export function ExternalReceiptModal({ isOpen, onClose, onRegistered, payment })
                   value={form.external_issued_date}
                   onChange={e => setForm(f => ({ ...f, external_issued_date: e.target.value }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">הערות (אופציונלי)</label>
+                <textarea
+                  value={form.remarks}
+                  onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))}
+                  rows={3}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-right"
+                  placeholder="הערות שיופיעו על הקבלה..."
                 />
               </div>
 

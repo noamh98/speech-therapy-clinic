@@ -224,7 +224,7 @@ export async function createTreatment(data) {
       try {
         await linkAppointmentToTreatment(treatmentData.appointmentId, treatmentId);
         await updateAppointment(treatmentData.appointmentId, {
-          status: 'completed',
+          status: PAYMENT_STATUS.COMPLETED,
         });
         console.log('[treatments.js] Linked treatment to appointment:', treatmentData.appointmentId);
       } catch (err) {

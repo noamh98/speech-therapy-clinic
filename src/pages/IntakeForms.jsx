@@ -66,8 +66,8 @@ export default function IntakeForms() {
                 <p className="font-medium text-gray-900">{patientMap[f.patient_id] || f.patient_id}</p>
                 <p className="text-xs text-gray-400">{formatDate(f.date)} · {f.filled_by}</p>
               </div>
-              <Badge color={f.status === 'completed' ? 'green' : 'gray'}>
-                {f.status === 'completed' ? 'הושלם' : 'טיוטה'}
+              <Badge color={f.status === PAYMENT_STATUS.COMPLETED ? 'green' : 'gray'}>
+                {f.status === PAYMENT_STATUS.COMPLETED ? 'הושלם' : 'טיוטה'}
               </Badge>
             </Card>
           ))}
@@ -107,7 +107,7 @@ export default function IntakeForms() {
             <label className="label">סטטוס</label>
             <select className="input" value={form.status} onChange={set('status')}>
               <option value="draft">טיוטה</option>
-              <option value="completed">הושלם</option>
+              <option value={PAYMENT_STATUS.COMPLETED}>הושלם</option>
             </select>
           </div>
           <div className="flex gap-2 pt-2">

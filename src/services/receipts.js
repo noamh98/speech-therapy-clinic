@@ -38,9 +38,9 @@ export async function getReceiptPdfUrl(pdfPath) {
   return getDownloadURL(storageRef);
 }
 
-export async function issueReceiptInternal(paymentId, taxWithholding = 0) {
+export async function issueReceiptInternal(paymentId, taxWithholding = 0, remarks = '') {
   const fn = httpsCallable(functions, 'issueReceiptInternal');
-  const result = await fn({ paymentId, taxWithholding });
+  const result = await fn({ paymentId, taxWithholding, remarks });
   const data = result.data;
   // Convert storage path to download URL using Firebase Auth credentials
   if (data.pdfPath) {

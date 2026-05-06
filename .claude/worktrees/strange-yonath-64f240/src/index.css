@@ -1,0 +1,108 @@
+/* src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --sidebar-width: 256px;
+  --sidebar-collapsed-width: 64px;
+  --header-height: 56px;
+  --bottom-nav-height: 60px;
+}
+
+* {
+  direction: rtl;
+}
+
+html, body, #root {
+  height: 100%;
+  font-family: 'Heebo', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+/* Recharts RTL fix */
+.recharts-wrapper {
+  direction: ltr;
+}
+
+/* Dialog backdrop */
+.dialog-backdrop {
+  @apply fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center;
+}
+
+@layer components {
+  /* ── Buttons ── */
+  .btn-primary {
+    @apply bg-blue-600 text-white px-4 py-2 rounded-lg
+           font-medium hover:bg-blue-700 active:bg-blue-800
+           transition-colors shadow-sm
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2;
+  }
+  .btn-secondary {
+    @apply bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg
+           font-medium hover:bg-gray-50 active:bg-gray-100
+           transition-colors
+           focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-1;
+  }
+  .btn-danger {
+    @apply bg-red-500 text-white px-4 py-2 rounded-lg font-medium
+           hover:bg-red-600 active:bg-red-700 transition-colors
+           focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2;
+  }
+
+  /* ── Card ── */
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-4;
+  }
+
+  /* ── Form inputs ── */
+  .input {
+    @apply w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm
+           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+           placeholder:text-gray-400 bg-white transition-shadow;
+  }
+  .label {
+    @apply block text-sm font-medium text-gray-700 mb-1.5;
+  }
+
+  /* ── Badge ── */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  /* ── Mobile-safe bottom padding ── */
+  .pb-safe {
+    padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ── Responsive table wrapper ── */
+.table-responsive {
+  @apply overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0;
+}
+
+/* ── Touch-friendly tap targets ── */
+@media (max-width: 768px) {
+  button, a {
+    min-height: 36px;
+  }
+}
+
+/* ── Smooth page transitions ── */
+.page-enter {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 200ms ease, transform 200ms ease;
+}

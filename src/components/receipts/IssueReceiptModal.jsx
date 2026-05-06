@@ -10,6 +10,7 @@ const METHOD_HE = {
 
 export function IssueReceiptModal({ isOpen, onClose, onIssued, payment }) {
   const [taxWithholding, setTaxWithholding] = useState(0);
+  const [remarks, setRemarks] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -22,7 +23,7 @@ export function IssueReceiptModal({ isOpen, onClose, onIssued, payment }) {
     setLoading(true);
     setError('');
     try {
-      const data = await issueReceiptInternal(payment.id, taxWithholding);
+      const data = await issueReceiptInternal(payment.id, taxWithholding, remarks);
       setResult(data);
       onIssued?.(data);
     } catch (err) {
@@ -34,6 +35,7 @@ export function IssueReceiptModal({ isOpen, onClose, onIssued, payment }) {
 
   const handleClose = () => {
     setTaxWithholding(0);
+    setRemarks('');
     setConfirmed(false);
     setError('');
     setResult(null);
@@ -99,6 +101,18 @@ export function IssueReceiptModal({ isOpen, onClose, onIssued, payment }) {
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-right"
               />
               <p className="text-xs text-gray-400 mt-1">השאר 0 אם לא חל ניכוי מס</p>
+            </div>
+
+            {/* Remarks */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">הערות (אופציונלי)</label>
+              <textarea
+                value={remarks}
+                onChange={e => setRemarks(e.target.value)}
+                rows={3}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-right"
+                placeholder="הערות שיופיעו על הקבלה..."
+              />
             </div>
 
             {error && (

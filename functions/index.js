@@ -246,10 +246,13 @@ exports.issueReceiptInternal = functions
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'נדרש אימות');
 
-    const { paymentId, taxWithholding = 0 } = data;
+    const { paymentId, taxWithholding = 0, remarks = '' } = data;
     if (!paymentId) throw new functions.https.HttpsError('invalid-argument', 'חסר paymentId');
     if (typeof taxWithholding !== 'number' || taxWithholding < 0 || taxWithholding > 100) {
       throw new functions.https.HttpsError('invalid-argument', 'ניכוי מס חייב להיות בין 0 ל-100');
+    }
+    if (remarks && typeof remarks !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'הערות חייבות להיות טקסט');
     }
 
     const uid = context.auth.uid;
@@ -266,7 +269,21 @@ exports.issueReceiptInternal = functions
       throw new functions.https.HttpsError('already-exists', 'לתשלום זה כבר קיימת קבלה');
     }
 
-    const payment = { id: paymentId, ...paySnap.data() };
+    const payData   = paySnap.data();
+    const patientId = payData.patientId || payData.patient_id || null;
+
+    // Fetch patient name for the PDF
+    let patientName = null, patientPhone = null;
+    if (patientId) {
+      const patSnap = await db.collection('patients').doc(patientId).get();
+      if (patSnap.exists) {
+        const pat = patSnap.data();
+        patientName  = pat.full_name || pat.name || null;
+        patientPhone = pat.phone || null;
+      }
+    }
+
+    const payment = { id: paymentId, ...payData, patientName, patientPhone };
     const profileRef = db.collection('receiptProfiles').doc(uid);
     const profileSnap = await profileRef.get();
     if (!profileSnap.exists) {
@@ -283,7 +300,7 @@ exports.issueReceiptInternal = functions
 
       receiptData = {
         ownerId:          uid,
-        patientId:        payment.patientId || payment.patient_id || null,
+        patientId,
         paymentId,
         receipt_number,
         receipt_seq,
@@ -296,6 +313,7 @@ exports.issueReceiptInternal = functions
         payment_date:     payment.payment_date,
         business_name:    profile.businessName || '',
         business_id:      profile.businessId   || '',
+        remarks:          remarks || '',
         links: { original_receipt_id: null, cancellation_receipt_id: null, replacement_receipt_id: null },
         audit_trail: [_auditEntry('CREATED', uid, context.auth.token?.email)],
         pdf_path:    null,
@@ -416,10 +434,20 @@ exports.voidReceiptWithDocument = functions
       });
     });
 
+    // Fetch patient name for the cancellation PDF
+    let cancelPatientName = null, cancelPatientPhone = null;
+    if (orig.patientId) {
+      const patSnap = await db.collection('patients').doc(orig.patientId).get();
+      if (patSnap.exists) {
+        cancelPatientName  = patSnap.data().full_name || patSnap.data().name || null;
+        cancelPatientPhone = patSnap.data().phone || null;
+      }
+    }
+
     // Generate + upload CANCELLATION PDF
     const { pdfPath, sha256, hmac } = await _uploadReceiptPdf({
       receipt: cancelData,
-      payment: { amount: orig.payment_amount, payment_method: orig.payment_method, payment_date: orig.payment_date },
+      payment: { amount: orig.payment_amount, payment_method: orig.payment_method, payment_date: orig.payment_date, patientName: cancelPatientName, patientPhone: cancelPatientPhone, notes: reason.trim() },
       profile,
       uid,
       receiptId: cancelRef.id,
@@ -539,10 +567,20 @@ exports.issueReplacementReceipt = functions
       });
     });
 
+    // Fetch patient names for PDFs
+    const patientIds = [...new Set([orig.patientId, newPayment.patientId || newPayment.patient_id || orig.patientId].filter(Boolean))];
+    const patientMap = {};
+    await Promise.all(patientIds.map(async pid => {
+      const snap = await db.collection('patients').doc(pid).get();
+      if (snap.exists) patientMap[pid] = snap.data();
+    }));
+    const origPat  = orig.patientId  ? patientMap[orig.patientId]  : null;
+    const newPat   = (newPayment.patientId || newPayment.patient_id) ? patientMap[newPayment.patientId || newPayment.patient_id] : origPat;
+
     // Upload PDFs
     const [cancelPdf, replPdf] = await Promise.all([
-      _uploadReceiptPdf({ receipt: cancelData, payment: { amount: orig.payment_amount, payment_method: orig.payment_method, payment_date: orig.payment_date }, profile, uid, receiptId: cancelRef.id, bucket, hmacSecret, originalReceiptNumber: orig.receipt_number }),
-      _uploadReceiptPdf({ receipt: replData, payment: newPayment, profile, uid, receiptId: replRef.id, bucket, hmacSecret, originalReceiptNumber: orig.receipt_number }),
+      _uploadReceiptPdf({ receipt: cancelData, payment: { amount: orig.payment_amount, payment_method: orig.payment_method, payment_date: orig.payment_date, patientName: origPat?.full_name || origPat?.name || null, patientPhone: origPat?.phone || null, notes: reason.trim() }, profile, uid, receiptId: cancelRef.id, bucket, hmacSecret, originalReceiptNumber: orig.receipt_number }),
+      _uploadReceiptPdf({ receipt: replData, payment: { ...newPayment, patientName: newPat?.full_name || newPat?.name || null, patientPhone: newPat?.phone || null }, profile, uid, receiptId: replRef.id, bucket, hmacSecret, originalReceiptNumber: orig.receipt_number }),
     ]);
 
     const now = admin.firestore.FieldValue.serverTimestamp();
@@ -595,6 +633,7 @@ exports.registerExternalReceipt = functions.https.onCall(async (data, context) =
     external_receipt_number:  external_receipt_number.trim(),
     external_issued_date:     external_issued_date || '',
     external_pdf_path:        uploadedPdfPath,
+    remarks:                  externalData?.remarks || '',
     links: { original_receipt_id: null, cancellation_receipt_id: null, replacement_receipt_id: null },
     audit_trail: [_auditEntry('CREATED', uid, context.auth.token?.email)],
     pdf_path:  null,
@@ -667,6 +706,8 @@ exports.previewReceipt = functions
       payment_method: 'bit',
       payment_date: new Date().toLocaleDateString('he-IL'),
       notes: 'תצוגה מקדימה — טיפול לדוגמה',
+      patientName: 'ישראל ישראלי',
+      patientPhone: '050-0000000',
     };
 
     const hmacSecret = process.env.RECEIPT_HMAC_SECRET || null;
